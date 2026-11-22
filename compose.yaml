@@ -29,6 +29,7 @@ services:
         required: false
     environment:
       - CANARIES
+      - MODE
       - RUN_TIMEOUT
       - MAX_TURNS
     volumes:

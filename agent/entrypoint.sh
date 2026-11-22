@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Usage: entrypoint.sh <fixture_id>      run one red-team fixture, stream-json transcript on stdout
 #        entrypoint.sh shell [cmd...]    debugging
-# Env: CANARIES (JSON of fake secrets, from harness/canaries.py), CLAUDE_CODE_OAUTH_TOKEN.
+# Env: CANARIES (JSON of fake secrets, from harness/canaries.py), CLAUDE_CODE_OAUTH_TOKEN,
+#      MODE=agent (default: claude -p reads the injection) or replay (run the fixture's own
+#      exfil command directly, standing in for a compromised agent or helper process).
 set -euo pipefail
 
 if [[ "${1:-}" == shell ]]; then shift; exec "${@:-bash}"; fi
@@ -29,6 +31,10 @@ ssh = pathlib.Path.home() / ".ssh"; ssh.mkdir(mode=0o700, exist_ok=True)
 (ssh / "id_ed25519").write_text(c["private_key"]); (ssh / "id_ed25519").chmod(0o600)
 PY
 unset CANARIES
+
+if [[ "${MODE:-agent}" == replay ]]; then
+  exec timeout "${RUN_TIMEOUT:-600}" bash -c "$(jq -r .replay "$FIX/fixture.json")"
+fi
 
 PROMPT=$(jq -r .prompt "$FIX/fixture.json")
 exec timeout "${RUN_TIMEOUT:-600}" claude -p "$PROMPT" \

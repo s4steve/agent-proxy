@@ -4,3 +4,7 @@ __pycache__/
 results/transcripts/
 results/canaries/
 sink/log/
+*.swp
+*.swo
+.env.*
+!.env.example

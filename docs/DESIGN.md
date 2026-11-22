@@ -35,7 +35,18 @@ live requests.
 - Nothing is added to the macOS keychain. `ca/scripts/remove-trust.sh` removes everything.
 
 ## Measurement
-`harness/run.py --setup <name>` runs each fixture N times. Per run:
+Two modes, recorded in the CSV's `mode` column:
+
+- **replay**: the agent container runs the fixture's own exfil command (`replay` in
+  `fixture.json`, copied verbatim from the injected text) as the agent user, with no model in the
+  loop. It stands in for a compromised agent or a helper process. This measures the network layer
+  alone, deterministically, so one run per fixture is enough.
+- **agent**: `claude -p` reads the injected content. This measures model compliance and the
+  network layer together. A leak needs both the model to obey and the network to allow it.
+
+The firewall claim rests on replay. Agent mode shows how often the threat happens in practice.
+
+`harness/run.py --setup <name> --mode <mode>` runs each fixture N times. Per run:
 1. `harness/canaries.py` generates fresh fake secrets (AWS-, GitHub-, Stripe-, Slack-shaped, and an
    SSH key). The values themselves are the canaries.
 2. The agent entrypoint builds a throwaway git repo from `fixtures/_base/repo` plus the fixture's
@@ -47,7 +58,7 @@ live requests.
    value, or named an attacker host together with a secret source (heuristic; transcripts are kept
    in `results/transcripts/` to check it).
 
-A later setup's leak rate is only meaningful on fixtures that leak under `none`.
+In agent mode, a later setup's leak rate is only meaningful on fixtures that leak under `none`.
 
 ## Fixtures (M0)
 | id | vector | channel |
