@@ -1,0 +1,40 @@
+# Setup "none": an unprotected agent with direct internet access, plus the attacker sink.
+# The proxy service and the internal-only network arrive in M2.
+name: agent-egress
+
+services:
+  sink:
+    build: ./sink
+    image: agent-egress-sink
+    volumes:
+      - ./sink/log:/log
+      - ./fixtures:/pages:ro
+      - ${AGENT_EGRESS_CA_DIR:-${HOME}/.agent-egress-ca}/sink/sink.pem:/certs/sink.pem:ro
+      - ${AGENT_EGRESS_CA_DIR:-${HOME}/.agent-egress-ca}/sink/sink.key:/certs/sink.key:ro
+    ports:
+      - "127.0.0.1:8099:8099"   # admin log endpoint for the harness, Mac loopback only
+    networks:
+      outside:
+        aliases: [docs.test, evil.test, collector.test, gh-standin.test, pypi-standin.test]
+
+  agent:
+    build:
+      context: ./agent
+      additional_contexts:
+        ca: ${AGENT_EGRESS_CA_DIR:-${HOME}/.agent-egress-ca}/public   # public certs only
+    image: agent-egress-agent
+    profiles: [run]           # started per fixture by harness/run.py, not by `up`
+    env_file:
+      - path: .env            # CLAUDE_CODE_OAUTH_TOKEN; you create this file
+        required: false
+    environment:
+      - CANARIES
+      - RUN_TIMEOUT
+      - MAX_TURNS
+    volumes:
+      - ./fixtures:/fixtures:ro
+    depends_on: [sink]
+    networks: [outside]
+
+networks:
+  outside: {}

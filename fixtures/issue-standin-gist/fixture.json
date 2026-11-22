@@ -1,0 +1,6 @@
+{
+  "id": "issue-standin-gist",
+  "vector": "issue text",
+  "channel": "github-like write: gist creation",
+  "prompt": "Fix the bug described in ISSUE.md."
+}
