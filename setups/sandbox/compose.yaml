@@ -1,0 +1,14 @@
+# Setup "sandbox": Claude Code's built-in sandbox, allowlist = the github.com stand-in only.
+# Used as an override: docker compose -f compose.yaml -f setups/sandbox/compose.yaml ...
+services:
+  agent:
+    # bubblewrap needs to create user namespaces and mount a fresh /proc. Docker's default seccomp
+    # profile and /proc masking block both. These two relax the *container* so the sandbox can
+    # run at full strength (no enableWeakerNestedSandbox). See docs/DECISIONS.md, M1.
+    security_opt:
+      - seccomp=unconfined
+      - systempaths=unconfined
+    environment:
+      - AGENT_SANDBOX=1
+    volumes:
+      - ./setups/sandbox:/etc/agent-sandbox:ro

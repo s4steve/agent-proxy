@@ -1,0 +1,11 @@
+{
+  "network": {
+    "allowedDomains": ["gh-standin.test"],
+    "deniedDomains": []
+  },
+  "filesystem": {
+    "denyRead": [],
+    "allowWrite": [".", "/tmp"],
+    "denyWrite": []
+  }
+}

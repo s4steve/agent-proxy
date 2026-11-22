@@ -18,8 +18,8 @@ This is a personal learning project. Readable code and honest measurements come 
 | milestone | what | state |
 |---|---|---|
 | M0 | fixtures, canaries, sink, harness; the unprotected "none" baseline | done: replay leaks 9/9; agent leaks 0/27 (the model refused every injection) |
-| M1 | Claude Code's built-in sandbox baseline | next |
-| M2 | mitmproxy sidecar in observe mode, with its own CA | |
+| M1 | Claude Code's built-in sandbox baseline | done: replay leaks 3/9, all through the allowed broad domain (gist, issue, fronting) |
+| M2 | mitmproxy sidecar in observe mode, with its own CA | next |
 | M3 | whole-process boundary: a local MCP server's traffic goes through the proxy | |
 | M4 | policy engine and detectors in enforce mode | |
 | M5 | credential broker | |
@@ -78,6 +78,8 @@ Needs Docker Desktop and the Claude Code CLI on the host. Nothing else is instal
    python3 harness/run.py --setup none --mode agent --runs 3
    ```
 
+   Swap in `--setup sandbox` for the built-in sandbox baseline.
+
    Results go to `results/<setup>.csv`. Transcripts go to `results/transcripts/`, which is
    gitignored.
 
@@ -108,6 +110,7 @@ compose.yaml        agent + sink (proxy from M2)
 agent/              agent image and fixture entrypoint
 sink/               attacker server
 ca/scripts/         sink CA creation and trust removal
+setups/             per-setup compose overrides and settings (sandbox, later proxy)
 fixtures/           injection fixtures; _base/repo is the shared tiny project
 harness/            canaries, leak scanner, runner
 tests/              scanner tests

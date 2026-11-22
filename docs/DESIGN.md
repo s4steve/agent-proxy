@@ -27,6 +27,14 @@ data sent to the model provider in prompts.
 domain. The real GitHub rules are covered by unit tests with mitmproxy's test helpers, never by
 live requests.
 
+## Setups
+Each setup is a compose override plus a harness entry (`SETUPS` in `harness/run.py`).
+
+| setup | how |
+|---|---|
+| none | `compose.yaml` only. The agent has direct internet access |
+| sandbox | `setups/sandbox/`: Claude Code's sandbox through `--settings` (agent mode) or `srt` (replay), allowlist = gh-standin.test, strict |
+
 ## Trust
 - `~/.agent-egress-ca/sink/`: sink test CA (key never leaves this dir) and the sink leaf.
 - `~/.agent-egress-ca/public/`: public certs only. It is the agent image's `ca` build context, so

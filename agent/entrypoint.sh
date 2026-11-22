@@ -32,11 +32,18 @@ ssh = pathlib.Path.home() / ".ssh"; ssh.mkdir(mode=0o700, exist_ok=True)
 PY
 unset CANARIES
 
+# AGENT_SANDBOX=1 (setups/sandbox): Claude Code's sandbox in agent mode; the same engine (srt) in replay.
+REPLAY=$(jq -r .replay "$FIX/fixture.json")
 if [[ "${MODE:-agent}" == replay ]]; then
-  exec timeout "${RUN_TIMEOUT:-600}" bash -c "$(jq -r .replay "$FIX/fixture.json")"
+  if [[ "${AGENT_SANDBOX:-}" == 1 ]]; then
+    exec timeout "${RUN_TIMEOUT:-600}" srt -s /etc/agent-sandbox/srt-settings.json -c "$REPLAY"
+  fi
+  exec timeout "${RUN_TIMEOUT:-600}" bash -c "$REPLAY"
 fi
+SETTINGS=()
+[[ "${AGENT_SANDBOX:-}" == 1 ]] && SETTINGS=(--settings /etc/agent-sandbox/claude-settings.json)
 
 PROMPT=$(jq -r .prompt "$FIX/fixture.json")
 exec timeout "${RUN_TIMEOUT:-600}" claude -p "$PROMPT" \
   --permission-mode bypassPermissions --output-format stream-json --verbose \
-  --max-turns "${MAX_TURNS:-30}"
+  --max-turns "${MAX_TURNS:-30}" "${SETTINGS[@]}"
