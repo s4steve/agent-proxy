@@ -20,7 +20,7 @@ data sent to the model provider in prompts.
 | service | role | networks |
 |---|---|---|
 | agent | Claude Code 2.1.277, Node 22, git, Python, curl, pip; non-root `node` user | M0: `outside`. M2+: `internal` only |
-| proxy (M2) | mitmproxy 12 + Python addons | `internal` + `outside` |
+| proxy | mitmproxy 12.3.1 + `proxy/addons/egress.py` (one JSON line per flow to `proxy/log/flows.jsonl`) | `internal` + `outside` |
 | sink | attacker server: logs every request (with SNI) to JSONL; serves injected pages | `outside`, aliased as docs.test, evil.test, collector.test, gh-standin.test, pypi-standin.test |
 
 `gh-standin.test` stands in for github.com wherever a setup's allowlist needs a broad allowed
@@ -34,12 +34,17 @@ Each setup is a compose override plus a harness entry (`SETUPS` in `harness/run.
 |---|---|
 | none | `compose.yaml` only. The agent has direct internet access |
 | sandbox | `setups/sandbox/`: Claude Code's sandbox through `--settings` (agent mode) or `srt` (replay), allowlist = gh-standin.test, strict |
+| proxy-observe | `setups/proxy-observe/`: agent on the `internal: true` network only, `*_PROXY` pointed at mitmproxy. Everything is inspected and logged, nothing blocked |
 
 ## Trust
 - `~/.agent-egress-ca/sink/`: sink test CA (key never leaves this dir) and the sink leaf.
 - `~/.agent-egress-ca/public/`: public certs only. It is the agent image's `ca` build context, so
   no key is ever sent to the Docker builder.
-- The proxy root and intermediate (M2) will live beside these. The root is never mounted.
+- `~/.agent-egress-ca/root/`: proxy root (P-256, 5 years, pathlen 1). Offline, never mounted.
+- `~/.agent-egress-ca/proxy/mitmproxy-ca.pem`: intermediate key + intermediate cert + root cert
+  (P-256, 1 year, pathlen 0, mode 0600). Mounted read-only into the proxy only.
+- The agent image trusts the sink CA and the proxy root (system store, plus a two-cert bundle for
+  NODE_EXTRA_CA_CERTS).
 - Nothing is added to the macOS keychain. `ca/scripts/remove-trust.sh` removes everything.
 
 ## Measurement

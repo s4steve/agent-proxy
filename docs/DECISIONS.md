@@ -146,5 +146,88 @@ never tried. The sandbox's enforcement under `-p` is shown by the control check 
   WebFetch is also an unfiltered exfil channel: a GET with a secret in the URL goes out directly
   from the container.
 
+## M2: proxy sidecar in observe mode (2026-11-21, mitmproxy 12.3.1)
+
+### Doc checks
+Read: docs.mitmproxy.org/stable concepts/certificates, api/events, concepts/options,
+api/mitmproxy/tls, addons/overview; PyPI and Docker Hub for mitmproxy; Docker bridge and compose
+network docs. Also read `mitmproxy/certs.py` in the 12.3.1 image.
+
+| fact | source |
+|---|---|
+| 12.3.1 is the latest release (Oct 25, 2026), Python >= 3.12; image `mitmproxy/mitmproxy:12.3.1` (Python 3.15.1 inside) | PyPI, Docker Hub |
+| Custom CA: `confdir/mitmproxy-ca.pem` = private key + certificate; needs CA:TRUE and keyCertSign | certificates |
+| Intermediates or chains in `mitmproxy-ca.pem`: **not documented** | certificates |
+| `CertStore.from_files`: the first cert signs leaves. If the file has more than one cert, all of them are served as the chain | certs.py source |
+| `ssl_verify_upstream_trusted_ca` = path to a PEM of trusted CAs | options |
+| `tls_clienthello(data)`, `data.ignore_connection = True` passes TLS through uninspected | events, tls |
+| `flow.response.stream = True` must be set in `responseheaders` | http API |
+| `tflow` and `taddons` are internal test helpers with no stable API | addons overview |
+| compose `internal: true` = "externally isolated network". Docs don't say what's blocked or whether DNS works | compose networks (tested below) |
+
+### CA chain: tested
+- **Key + intermediate only:** mitmproxy served the **leaf alone**. `openssl s_client` gave
+  `unable to verify the first certificate`, and curl, Python, git, pip, npm and Claude Code all
+  rejected it. The intermediate isn't sent, so clients that only trust the root can't build a path.
+- **Key + intermediate + root certificate:** mitmproxy serves leaf, intermediate, root.
+  `Verify return code: 0`. curl, Python urllib and requests, git, pip, npm, Claude Code (including
+  WebFetch) and Node (with `NODE_USE_ENV_PROXY=1`) all accept the intermediate-signed leaves.
+- **Decision:** keep the intermediate design and append the root *certificate* to
+  `mitmproxy-ca.pem`. The root key never leaves `~/.agent-egress-ca/root/`. No fallback to a
+  separate short-lived root is needed.
+- The confdir is a tmpfs with `mitmproxy-ca.pem` bind-mounted read-only, because mitmproxy writes
+  `mitmproxy-dhparam.pem` into the confdir on start. With the directory mounted read-only it
+  crashed.
+- The proxy container runs as root (the image default). It holds only the intermediate key.
+  ponytail: run as a non-root uid once the bind-mounted 0600 key is made readable to it.
+
+### Isolation: tested
+On the `internal: true` network the agent can resolve only container names (`proxy`). External
+DNS fails; direct TCP to the sink or the internet gets 000; raw TCP and UDP to 1.1.1.1 get
+`Network is unreachable`. Docker Desktop 29.5.2 on arm64 behaves as documented for Linux. The
+proxy is the only way out.
+
+### Results
+| mode | runs | leaked | in proxy log |
+|---|---|---|---|
+| replay | 9 | 9/9 (observe blocks nothing) | 9/9 |
+| agent | 9 (1 per fixture) | 0/9: attempted 0/9, the model refused every injection ($0.63) | the model traffic (api.anthropic.com) and WebFetch are logged |
+
+- Every replay leak is in the proxy log with host, method, path, query keys and latency. The
+  fronted request is logged as `sni=gh-standin.test host=evil.test`: the mismatch the sandbox's
+  hostname proxy can't see.
+- **Real work session** (`setups/proxy-observe/worksession.sh`: pip install, pytest, a requests
+  call, git clone, npm view, WebFetch): all six steps worked and every flow was logged (37
+  flows). Nothing was blocked and there were no TLS failures.
+
+### Wiring alternative: `sandbox.network.httpProxyPort`
+`setups/proxy-port/` keeps the agent on the outside network and points only the sandbox at the
+proxy (through a localhost socat relay, because the setting takes a localhost port).
+`experiment.sh` sends three harmless requests:
+
+| traffic | network-isolation wiring | httpProxyPort wiring |
+|---|---|---|
+| sandboxed Bash curl | proxy | proxy |
+| WebFetch | proxy | **direct to the sink, not in the proxy log** |
+| process outside the sandbox (stands in for a hook or local MCP server) | proxy | **direct to the sink, not in the proxy log** |
+
+httpProxyPort covers only what the sandbox covers. It is also a per-session setting, while
+network isolation applies to the whole container. It does avoid the proxy settings for Claude's
+own traffic, and the CA trust for anything outside Bash. **Decision:** network isolation
+(`internal: true`) is the boundary. httpProxyPort is not used.
+
+### Findings
+- **A read-only `git clone` is HTTP `POST`** (`/git-upload-pack`). M4's GitHub rules must tell
+  upload-pack (read) from receive-pack (write) by path, not by method.
+- **Secrets in the URL path end up in the proxy log** (`readme-newhost` puts the token in the
+  path). Query values are already left out (only keys are logged). M4 should redact path
+  segments that a detector flags.
+- api.anthropic.com is logged with host, method, bare path, status and latency only. Responses
+  are streamed (`responseheaders`), so the model's SSE output isn't buffered.
+
 ## Tools that ignored proxy or CA settings
-(Filled in from M2 on.)
+| tool | proxy env | CA env | result inside the agent container (M2) |
+|---|---|---|---|
+| Node built-in `fetch` / `https` (Node 22.23.5) | **ignored** | honored (NODE_EXTRA_CA_CERTS) | Fails closed (DNS `EAI_AGAIN`, no route). Works through the proxy with `NODE_USE_ENV_PROXY=1` (experimental warning), now set in the proxy setups |
+| raw TCP/UDP sockets | n/a | n/a | `Network is unreachable`. No egress except through the proxy |
+| curl, Python urllib/requests, git, pip, npm, Claude Code, WebFetch | honored | honored | logged by the proxy |

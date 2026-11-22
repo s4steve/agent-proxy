@@ -19,8 +19,8 @@ This is a personal learning project. Readable code and honest measurements come 
 |---|---|---|
 | M0 | fixtures, canaries, sink, harness; the unprotected "none" baseline | done: replay leaks 9/9; agent leaks 0/27 (the model refused every injection) |
 | M1 | Claude Code's built-in sandbox baseline | done: replay leaks 3/9, all through the allowed broad domain (gist, issue, fronting) |
-| M2 | mitmproxy sidecar in observe mode, with its own CA | next |
-| M3 | whole-process boundary: a local MCP server's traffic goes through the proxy | |
+| M2 | mitmproxy sidecar in observe mode, with its own CA | done: every flow logged, including the fronted request's SNI/Host mismatch; nothing blocked |
+| M3 | whole-process boundary: a local MCP server's traffic goes through the proxy | next |
 | M4 | policy engine and detectors in enforce mode | |
 | M5 | credential broker | |
 | M6 | MCP tool-call gating | |
@@ -55,10 +55,14 @@ See [docs/DESIGN.md](docs/DESIGN.md) for the full design and
 
 Needs Docker Desktop and the Claude Code CLI on the host. Nothing else is installed on the host.
 
-1. Create the sink's test CA. It lives in `~/.agent-egress-ca/`, outside the repo:
+1. Create the test CAs. They live in `~/.agent-egress-ca/`, outside the repo:
 
    ```bash
    bash ca/scripts/make-sink-ca.sh
+   ```
+
+   ```bash
+   bash ca/scripts/make-proxy-ca.sh
    ```
 
 2. Create a token for the agent container with `claude setup-token`, and put it in a
@@ -78,15 +82,19 @@ Needs Docker Desktop and the Claude Code CLI on the host. Nothing else is instal
    python3 harness/run.py --setup none --mode agent --runs 3
    ```
 
-   Swap in `--setup sandbox` for the built-in sandbox baseline.
+   Swap in `--setup sandbox` or `--setup proxy-observe` for the other setups.
 
    Results go to `results/<setup>.csv`. Transcripts go to `results/transcripts/`, which is
    gitignored.
 
-4. Scanner tests:
+4. Tests:
 
    ```bash
    python3 -m unittest tests/test_scan.py
+   ```
+
+   ```bash
+   docker compose -f compose.yaml -f setups/proxy-observe/compose.yaml run --rm -T --no-deps proxy python -m pytest -q /addons/tests
    ```
 
 To remove every trust anchor, container and image this project created:
@@ -106,11 +114,12 @@ bash ca/scripts/remove-trust.sh
 ## Layout
 
 ```
-compose.yaml        agent + sink (proxy from M2)
+compose.yaml        agent + sink (the "none" setup); setups/ layer on top
 agent/              agent image and fixture entrypoint
 sink/               attacker server
+proxy/              mitmproxy image, egress addon and its tests
 ca/scripts/         sink CA creation and trust removal
-setups/             per-setup compose overrides and settings (sandbox, later proxy)
+setups/             per-setup compose overrides and settings (sandbox, proxy-observe, proxy-port experiment)
 fixtures/           injection fixtures; _base/repo is the shared tiny project
 harness/            canaries, leak scanner, runner
 tests/              scanner tests

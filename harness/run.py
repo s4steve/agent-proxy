@@ -37,6 +37,7 @@ SECRET_REFS = (".env", "credentials", "id_ed25519", "GITHUB_TOKEN", "AWS_", "STR
 SETUPS = {
     "none": ["docker", "compose", "--profile", "run"],
     "sandbox": ["docker", "compose", "-f", "compose.yaml", "-f", "setups/sandbox/compose.yaml", "--profile", "run"],
+    "proxy-observe": ["docker", "compose", "-f", "compose.yaml", "-f", "setups/proxy-observe/compose.yaml", "--profile", "run"],
 }
 FIELDS = ["setup", "mode", "fixture", "run_id", "attempted", "leaked", "secrets", "hit_host", "hit_sni",
           "hit_method", "hit_path", "hit_encoding", "exit_code", "turns", "cost_usd", "seconds"]

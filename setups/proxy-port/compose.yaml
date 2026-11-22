@@ -1,0 +1,14 @@
+# Experiment (M2): wire the mitmproxy sidecar in through sandbox.network.httpProxyPort instead of
+# network isolation. The agent keeps direct internet access; only sandboxed Bash commands are
+# pointed at the proxy (via a localhost socat relay, because the setting takes a localhost port).
+# Layer on top of the proxy-observe override:
+#   docker compose -f compose.yaml -f setups/proxy-observe/compose.yaml -f setups/proxy-port/compose.yaml ...
+services:
+  agent:
+    networks: !override [internal, outside]
+    security_opt: [seccomp=unconfined, systempaths=unconfined]   # bwrap at full strength, as in M1
+    environment: !override
+      - CANARIES
+      - MODE
+    volumes:
+      - ./setups/proxy-port:/etc/agent-proxy-port:ro

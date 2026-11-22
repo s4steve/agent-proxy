@@ -16,13 +16,16 @@ RUN npm install -g @anthropic-ai/sandbox-runtime@${SANDBOX_RUNTIME_VERSION}
 # Trust anchors. The `ca` build context is ~/.agent-egress-ca/public (outside the repo,
 # public certs only), so no CA key is ever sent to the builder or enters an image.
 COPY --from=ca sink-ca.pem /usr/local/share/ca-certificates/agent-egress-sink.crt
-RUN update-ca-certificates
+COPY --from=ca proxy-root.pem /usr/local/share/ca-certificates/agent-egress-proxy-root.crt
+# NODE_EXTRA_CA_CERTS takes a single file, so give Node a bundle of just our two anchors.
+RUN update-ca-certificates \
+    && cat /usr/local/share/ca-certificates/agent-egress-*.crt > /usr/local/share/agent-egress-anchors.pem
 
 ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
     REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
     GIT_SSL_CAINFO=/etc/ssl/certs/ca-certificates.crt \
     PIP_CERT=/etc/ssl/certs/ca-certificates.crt \
-    NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/agent-egress-sink.crt \
+    NODE_EXTRA_CA_CERTS=/usr/local/share/agent-egress-anchors.pem \
     DISABLE_AUTOUPDATER=1 \
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 

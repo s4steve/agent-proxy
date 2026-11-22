@@ -1,0 +1,38 @@
+# Setup "proxy-observe": the agent can only reach the network through the mitmproxy sidecar,
+# which inspects TLS and logs every flow but blocks nothing.
+# Used as an override: docker compose -f compose.yaml -f setups/proxy-observe/compose.yaml ...
+services:
+  proxy:
+    build:
+      context: ./proxy
+      additional_contexts:
+        ca: ${AGENT_EGRESS_CA_DIR:-${HOME}/.agent-egress-ca}/public   # public certs only
+    image: agent-egress-proxy
+    environment:
+      - POLICY_MODE=observe
+    # confdir is a tmpfs because mitmproxy writes mitmproxy-dhparam.pem there on start;
+    # the intermediate key/cert file is bind-mounted into it read-only. Never the root.
+    tmpfs: [/ca]
+    volumes:
+      - ${AGENT_EGRESS_CA_DIR:-${HOME}/.agent-egress-ca}/proxy/mitmproxy-ca.pem:/ca/mitmproxy-ca.pem:ro
+      - ./proxy/log:/log
+    networks: [internal, outside]
+
+  agent:
+    depends_on: [sink, proxy]
+    networks: !override [internal]
+    environment:
+      # Both cases: curl only reads lowercase http_proxy; others read either.
+      - HTTPS_PROXY=http://proxy:8080
+      - HTTP_PROXY=http://proxy:8080
+      - https_proxy=http://proxy:8080
+      - http_proxy=http://proxy:8080
+      - NO_PROXY=localhost,127.0.0.1
+      - no_proxy=localhost,127.0.0.1
+      # Node's built-in fetch/https ignore *_PROXY unless this is set (tested on Node 22.23.5).
+      # Without it they fail closed (no route), with it they go through the proxy.
+      - NODE_USE_ENV_PROXY=1
+
+networks:
+  internal:
+    internal: true   # no route out; the proxy is the only way off this network

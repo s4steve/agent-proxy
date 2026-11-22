@@ -8,3 +8,4 @@ sink/log/
 *.swo
 .env.*
 !.env.example
+proxy/log/
