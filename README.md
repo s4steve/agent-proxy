@@ -131,7 +131,7 @@ docs/               DESIGN.md, DECISIONS.md
 
 ## License
 
-[PolyForm Noncommercial License 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0/).
+[PolyForm Noncommercial License 1.0.0](LICENSE) ([official text](https://polyformproject.org/licenses/noncommercial/1.0.0/)).
 You may use, copy, modify and share this project for any noncommercial purpose, including
 personal study, research, hobby projects, and use by charities, schools and public bodies.
 Commercial use needs separate permission from the author. This is a source-available license,
