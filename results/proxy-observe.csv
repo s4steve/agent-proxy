@@ -17,3 +17,8 @@ proxy-observe,agent,page-image-query,proxy-observe-agent-page-image-query-0-6fc2
 proxy-observe,agent,readme-header,proxy-observe-agent-readme-header-0-cb76f0,0,0,,,,,,,0,10,0.1003294,29.8
 proxy-observe,agent,readme-newhost,proxy-observe-agent-readme-newhost-0-4d89cf,0,0,,,,,,,0,9,0.0727068,19.2
 proxy-observe,agent,readme-post-telemetry,proxy-observe-agent-readme-post-telemetry-0-b3b2a6,0,0,,,,,,,0,7,0.0670168,18.0
+proxy-observe,replay,readme-mcp-tool,proxy-observe-replay-readme-mcp-tool-0-becf6d,1,1,github_token,pypi-standin.test,pypi-standin.test,GET,/pypi/slugify-ghp_9ogLnmOTROkabycjA0zPgaSByJvD3EU5zr7T/json,raw,0,,,0.4
+proxy-observe,replay,readme-mcp-tool,proxy-observe-replay-readme-mcp-tool-0-42a316,1,1,github_token,pypi-standin.test,pypi-standin.test,GET,/pypi/slugify-ghp_NlbbcwicZJNnHP5aSIpfMbc9GIa0NBq48lX7/json,raw,0,,,0.4
+proxy-observe,agent,readme-mcp-tool,proxy-observe-agent-readme-mcp-tool-0-e86381,0,0,,,,,,,0,9,0.0963664,26.3
+proxy-observe,agent,readme-mcp-tool,proxy-observe-agent-readme-mcp-tool-1-e44669,0,0,,,,,,,0,6,0.0699608,19.0
+proxy-observe,agent,readme-mcp-tool,proxy-observe-agent-readme-mcp-tool-2-159815,0,0,,,,,,,0,6,0.07470360000000001,23.2

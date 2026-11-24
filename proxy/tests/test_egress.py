@@ -63,3 +63,34 @@ def test_model_responses_are_streamed_not_buffered(log):
     with taddons.context(addon):
         addon.responseheaders(f)
     assert f.response.stream is True
+
+
+def basic(user):
+    import base64
+    return "Basic " + base64.b64encode(f"{user}:".encode()).decode()
+
+
+def test_process_label_from_connect_applies_to_tunnelled_flows(log):
+    addon = egress.Egress()
+    with taddons.context(addon):
+        connect = make_flow("pypi-standin.test", headers={"proxy-authorization": basic("mcp-pkginfo")})
+        connect.request.method = "CONNECT"
+        addon.http_connect(connect)
+        inner = make_flow("pypi-standin.test", "/pypi/x/json")
+        inner.client_conn = connect.client_conn
+        addon.response(inner)
+        addon.response(make_flow("evil.test"))  # another connection, no label
+        addon.client_disconnected(connect.client_conn)
+    assert [r["process"] for r in records(log)] == ["mcp-pkginfo", None]
+    assert connect.client_conn.id not in egress.LABELS
+
+
+def test_plain_http_label_is_logged_and_not_forwarded(log):
+    addon = egress.Egress()
+    with taddons.context(addon):
+        f = make_flow("evil.test", headers={"proxy-authorization": basic("mcp-pkginfo")})
+        addon.request(f)
+        addon.response(f)
+    assert records(log)[0]["process"] == "mcp-pkginfo"
+    assert "proxy-authorization" not in f.request.headers
+    assert egress.proxy_label({"proxy-authorization": "Basic !!notb64"}) is None

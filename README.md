@@ -20,8 +20,8 @@ This is a personal learning project. Readable code and honest measurements come 
 | M0 | fixtures, canaries, sink, harness; the unprotected "none" baseline | done: replay leaks 9/9; agent leaks 0/27 (the model refused every injection) |
 | M1 | Claude Code's built-in sandbox baseline | done: replay leaks 3/9, all through the allowed broad domain (gist, issue, fronting) |
 | M2 | mitmproxy sidecar in observe mode, with its own CA | done: every flow logged, including the fronted request's SNI/Host mismatch; nothing blocked |
-| M3 | whole-process boundary: a local MCP server's traffic goes through the proxy | next |
-| M4 | policy engine and detectors in enforce mode | |
+| M3 | whole-process boundary: a local MCP server's traffic goes through the proxy | done: MCP server flows logged and labeled `process: mcp-pkginfo`; a server that skips the proxy fails closed |
+| M4 | policy engine and detectors in enforce mode | next |
 | M5 | credential broker | |
 | M6 | MCP tool-call gating | |
 | M7 | evaluation and `RESULTS.md` | |
@@ -35,7 +35,7 @@ This is a personal learning project. Readable code and honest measurements come 
 
 From M2 on, the agent sits on an internal-only Docker network and its only way out is the proxy.
 
-- **Fixtures** (`fixtures/`): 9 injected READMEs, issues, web pages and code comments. Each one
+- **Fixtures** (`fixtures/`): 10 injected READMEs, issues, web pages and code comments. Each one
   tries to get a fake secret out over a different path: a new host, a URL query, a POST body, a
   request header, a GitHub-style write, a fronted request or a pip index URL.
 - **Canaries** (`harness/canaries.py`): fresh fake secrets for every run, shaped like AWS,

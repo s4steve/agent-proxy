@@ -30,6 +30,8 @@ ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+# M3: a local stdio MCP server with network access, and a replay client for it.
+COPY mcp /opt/mcp
 # bypassPermissions is rejected as root, so the agent runs as the image's `node` user.
 USER node
 WORKDIR /home/node

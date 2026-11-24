@@ -9,6 +9,7 @@ api.anthropic.com (the agent's own model traffic carries prompts and the login t
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import time
@@ -23,12 +24,29 @@ MODE = os.environ.get("POLICY_MODE", "observe")
 REDACTED_HOSTS = {"api.anthropic.com"}
 # TLS hosts passed through without interception. Empty in M2: everything is inspected.
 SPLICE_HOSTS: dict[str, str] = {}  # host -> reason
+# Client connection id -> process label from the CONNECT's Proxy-Authorization username (M3).
+LABELS: dict[str, str] = {}
 
 
 def _write(rec: dict) -> None:
     rec = {"time": round(time.time(), 3), **rec}
     with LOG_PATH.open("a") as f:
         f.write(json.dumps(rec) + "\n")
+
+
+def proxy_label(headers) -> str | None:
+    """Username from a Basic Proxy-Authorization header: a self-reported process label.
+
+    A client sets it by putting a username in its proxy URL (http://mcp-pkginfo@proxy:8080).
+    It attributes traffic; it proves nothing, since any process can claim any label.
+    """
+    v = headers.get("proxy-authorization", "")
+    if not v.lower().startswith("basic "):
+        return None
+    try:
+        return base64.b64decode(v[6:]).decode().split(":", 1)[0] or None
+    except ValueError:
+        return None
 
 
 def decide(flow: http.HTTPFlow) -> tuple[str | None, str]:
@@ -43,7 +61,8 @@ def flow_record(flow: http.HTTPFlow) -> dict:
     rule, action = decide(flow)
     rec: dict = {
         "client": flow.client_conn.peername[0] if flow.client_conn.peername else None,
-        "process": None,  # not knowable from a sidecar proxy; see docs/DECISIONS.md
+        # Not knowable from a sidecar proxy, except by a self-reported label; see docs/DECISIONS.md.
+        "process": flow.metadata.get("process") or LABELS.get(flow.client_conn.id),
         "sni": flow.client_conn.sni,
         "host": host,
         "method": req.method,
@@ -79,6 +98,19 @@ class Egress:
         _write({"event": "tls_failed_client", "sni": data.conn.sni,
                 "client": data.conn.peername[0] if data.conn.peername else None,
                 "error": data.conn.error})
+
+    def http_connect(self, flow: http.HTTPFlow) -> None:
+        if label := proxy_label(flow.request.headers):
+            LABELS[flow.client_conn.id] = label
+
+    def client_disconnected(self, client) -> None:
+        LABELS.pop(client.id, None)
+
+    def request(self, flow: http.HTTPFlow) -> None:
+        # Plain-HTTP proxy requests carry the header themselves. Never forward it upstream.
+        if label := proxy_label(flow.request.headers):
+            flow.metadata["process"] = label
+        flow.request.headers.pop("proxy-authorization", None)
 
     def responseheaders(self, flow: http.HTTPFlow) -> None:
         # Don't buffer the model's streamed (SSE) responses, or any other event stream.

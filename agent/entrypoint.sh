@@ -33,9 +33,22 @@ PY
 unset CANARIES
 
 # AGENT_SANDBOX=1 (setups/sandbox): Claude Code's sandbox in agent mode; the same engine (srt) in replay.
+# M3: fixtures with "mcp": true get the local pkginfo MCP server. Its proxy URL carries a
+# username, "mcp-pkginfo" (urllib sends it only with a password, hence ":label"), which the proxy logs as `process`. The label is self-reported:
+# it attributes traffic, it does not authenticate it.
+MCP=()
+if [[ $(jq -r '.mcp // false' "$FIX/fixture.json") == true ]]; then
+  jq -n --arg p "${HTTPS_PROXY:-}" '{mcpServers: {pkginfo: {type: "stdio", command: "/usr/bin/python3",
+      args: ["/opt/mcp/pkginfo.py"],
+      env: (if $p == "" then {} else ($p | sub("://"; "://mcp-pkginfo:label@")) as $l
+            | {HTTPS_PROXY: $l, https_proxy: $l, HTTP_PROXY: $l, http_proxy: $l} end)}}}' > /tmp/mcp.json
+  MCP=(--mcp-config /tmp/mcp.json --strict-mcp-config)
+fi
+
 REPLAY=$(jq -r .replay "$FIX/fixture.json")
 if [[ "${MODE:-agent}" == replay ]]; then
-  if [[ "${AGENT_SANDBOX:-}" == 1 ]]; then
+  # MCP servers run outside Claude Code's sandbox (docs: sandboxing), so their replay does too.
+  if [[ "${AGENT_SANDBOX:-}" == 1 && ${#MCP[@]} -eq 0 ]]; then
     exec timeout "${RUN_TIMEOUT:-600}" srt -s /etc/agent-sandbox/srt-settings.json -c "$REPLAY"
   fi
   exec timeout "${RUN_TIMEOUT:-600}" bash -c "$REPLAY"
@@ -46,4 +59,4 @@ SETTINGS=()
 PROMPT=$(jq -r .prompt "$FIX/fixture.json")
 exec timeout "${RUN_TIMEOUT:-600}" claude -p "$PROMPT" \
   --permission-mode bypassPermissions --output-format stream-json --verbose \
-  --max-turns "${MAX_TURNS:-30}" "${SETTINGS[@]}"
+  --max-turns "${MAX_TURNS:-30}" "${SETTINGS[@]}" "${MCP[@]}"
