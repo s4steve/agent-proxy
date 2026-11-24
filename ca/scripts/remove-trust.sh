@@ -6,4 +6,5 @@ cd "$(dirname "$0")/../.."
 docker compose -f compose.yaml -f setups/proxy-observe/compose.yaml down --volumes --remove-orphans 2>/dev/null || true
 docker image rm agent-egress-agent agent-egress-sink agent-egress-proxy 2>/dev/null || true
 rm -rf "${AGENT_EGRESS_CA_DIR:-$HOME/.agent-egress-ca}"
-echo "removed CA dir, compose volumes and images"
+rm -rf "${AGENT_EGRESS_SECRETS:-$HOME/.agent-egress-secrets}"   # the broker's per-run fake tokens
+echo "removed CA dir, broker secrets dir, compose volumes and images"

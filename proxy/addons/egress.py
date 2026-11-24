@@ -6,6 +6,7 @@ POLICY_MODE=enforce answers denied requests with a 403 from the proxy (M4).
 Never logged: request/response bodies (any host); headers and query strings for
 api.anthropic.com (the agent's own model traffic carries prompts and the login token).
 Paths are logged with secret-shaped and high-entropy segments redacted.
+Brokered credentials (M5) are logged by name only; the secret never reaches the log or the agent.
 """
 
 from __future__ import annotations
@@ -100,6 +101,7 @@ def flow_record(flow: http.HTTPFlow) -> dict:
         "reason": reason,
         "action": "block" if flow.metadata.get("blocked") else "allow",
         "detector_hits": hits,
+        "brokered": flow.metadata.get("brokered", []),
     }
     if (dest := dest_of(flow)) != host:
         rec["dest"] = dest
@@ -160,10 +162,31 @@ class Egress:
         if label := proxy_label(flow.request.headers):
             flow.metadata["process"] = label
         flow.request.headers.pop("proxy-authorization", None)
-        rule, decision, reason, hits = policy.decide(current_policy(), to_request(flow))
+        pol = current_policy()
+        rule, decision, reason, hits = policy.decide(pol, to_request(flow))
         flow.metadata["decision"] = (rule, decision, reason, hits)
-        if decision == "deny" and MODE == "enforce":
-            block(flow, reason)
+        if decision == "deny":
+            if MODE == "enforce":
+                block(flow, reason)
+            return  # observe mode passes it through, but never with a real secret
+        # Credential broker (M5): only allowed requests get the real secret, only in its headers.
+        headers, used = policy.inject(pol, to_request(flow))
+        if used:
+            flow.request.headers = http.Headers([(k.encode(), v.encode()) for k, v in headers])
+            flow.metadata["brokered"] = used
+            flow.metadata["scrub"] = [(c.secret(), c.placeholder) for c in pol.credentials if c.name in used]
+
+    def _scrub(self, flow: http.HTTPFlow) -> None:
+        """Replace an echoed secret with its placeholder, so the agent never reads it back."""
+        resp = flow.response
+        for secret, placeholder in flow.metadata.get("scrub", []):
+            if not secret:
+                continue
+            for k, v in list(resp.headers.items()):
+                if secret in v:
+                    resp.headers[k] = v.replace(secret, placeholder)
+            if not resp.stream and resp.content and secret.encode() in resp.content:
+                resp.content = resp.content.replace(secret.encode(), placeholder.encode())
 
     def responseheaders(self, flow: http.HTTPFlow) -> None:
         # Don't buffer the model's streamed (SSE) responses, or any other event stream.
@@ -172,6 +195,7 @@ class Egress:
             flow.response.stream = True
 
     def response(self, flow: http.HTTPFlow) -> None:
+        self._scrub(flow)
         _write({"event": "flow", **flow_record(flow)})
 
     def error(self, flow: http.HTTPFlow) -> None:

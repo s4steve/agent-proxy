@@ -33,3 +33,14 @@ rules:
   - name: docs
     hosts: [docs.python.org, docs.test]
     methods: [GET, HEAD]
+
+# Credential broker (M5). The agent holds the placeholder; the proxy holds the secret, in a file
+# mounted into the proxy only (setups/proxy-broker). Allowed requests to `hosts` that carry the
+# placeholder in `headers` get the secret instead (Basic auth is decoded and re-encoded). The
+# placeholder anywhere else is the `broker_placeholder` detector (part of `secrets`).
+# Responses that echo the secret are scrubbed back to the placeholder (not streamed ones).
+credentials:
+  - name: github
+    placeholder: egress-broker-placeholder-github
+    secret_file: /secrets/github_token
+    hosts: [github.com, api.github.com, gh-standin.test]

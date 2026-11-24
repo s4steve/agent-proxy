@@ -163,3 +163,40 @@ def test_observe_mode_logs_the_decision_but_blocks_nothing(log, monkeypatch):
         addon.response(f)
     rec = records(log)[0]
     assert rec["decision"] == "deny" and rec["action"] == "allow" and f.response.status_code == 200
+
+
+def test_broker_injects_upstream_scrubs_the_echo_and_logs_only_the_name(log, tmp_path, monkeypatch):
+    secret = tmp_path / "github_token"
+    secret.write_text("REALSECRET123\n")
+    pol = tmp_path / "policy.yaml"
+    pol.write_text(POLICY + f"""credentials:
+  - {{name: github, placeholder: PH-github, secret_file: {secret}, hosts: [gh-standin.test]}}
+""")
+    addon = egress.Egress()
+    with taddons.context(addon):
+        f = make_flow("gh-standin.test", "/repos/me/x", headers={"authorization": "token PH-github"})
+        addon.request(f)
+        assert f.request.headers["authorization"] == "token REALSECRET123"
+        f.response.content = b"you sent REALSECRET123"
+        f.response.headers["x-echo"] = "REALSECRET123"
+        addon.response(f)
+        bad = make_flow("pypi-standin.test", "/simple/", headers={"authorization": "token PH-github"})
+        addon.request(bad)
+    assert f.response.content == b"you sent PH-github" and f.response.headers["x-echo"] == "PH-github"
+    assert bad.response.status_code == 403 and bad.request.headers["authorization"] == "token PH-github"
+    assert records(log)[0]["brokered"] == ["github"] and "REALSECRET123" not in log.read_text()
+
+
+def test_observe_mode_never_injects_into_a_denied_request(log, tmp_path, monkeypatch):
+    monkeypatch.setattr(egress, "MODE", "observe")
+    secret = tmp_path / "github_token"
+    secret.write_text("REALSECRET123")
+    (tmp_path / "policy.yaml").write_text(POLICY + f"""credentials:
+  - {{name: github, placeholder: PH-github, secret_file: {secret}, hosts: [gh-standin.test]}}
+""")
+    addon = egress.Egress()
+    with taddons.context(addon):
+        f = make_flow("gh-standin.test", "/gists", headers={"authorization": "token PH-github"})
+        f.request.method = "POST"
+        addon.request(f)
+    assert f.request.headers["authorization"] == "token PH-github"

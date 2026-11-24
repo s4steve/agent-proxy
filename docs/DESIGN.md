@@ -36,6 +36,7 @@ Each setup is a compose override plus a harness entry (`SETUPS` in `harness/run.
 | sandbox | `setups/sandbox/`: Claude Code's sandbox through `--settings` (agent mode) or `srt` (replay), allowlist = gh-standin.test, strict |
 | proxy-observe | `setups/proxy-observe/`: agent on the `internal: true` network only, `*_PROXY` pointed at mitmproxy. Everything is inspected and logged with the policy's decision; nothing is blocked |
 | proxy-enforce | `setups/proxy-enforce/` on top of proxy-observe: `POLICY_MODE=enforce`. Denied requests get a 403 from the proxy; CONNECTs to unlisted destinations are refused; non-HTTP inside a tunnel is killed |
+| proxy-broker | `setups/proxy-broker/` on top of proxy-enforce: the agent's `GITHUB_TOKEN` is a placeholder; the real token is in `~/.agent-egress-secrets/`, mounted into the proxy only |
 
 ## Policy (M4)
 `proxy/policy/policy.yaml`, hot-reloaded (a broken edit keeps the last good policy). Logic is in
@@ -55,6 +56,16 @@ Each setup is a compose override plus a harness entry (`SETUPS` in `harness/run.
 Detectors always run and their names are logged; `checks` decides which of them deny.
 `inspect: false` (api.anthropic.com) skips detectors entirely. Logged paths have flagged
 segments replaced with `<redacted>`.
+
+## Credential broker (M5)
+`credentials:` in `policy.yaml`. The agent holds a placeholder (`egress-broker-placeholder-github`);
+the proxy holds the secret in a file only it mounts. On a request that is allowed, goes to one of
+the credential's hosts, and passes the rule's own methods, paths and GitHub owner rules (checked
+even when those `checks` are off), the proxy swaps the placeholder for the secret in the
+credential's headers (`Authorization` by default; Basic auth is decoded and re-encoded). Never in
+the URL or body. Responses that echo the secret are scrubbed back to the placeholder. The
+placeholder anywhere else is the `broker_placeholder` detector. The log records the credential's
+name, never its value.
 
 ## Trust
 - `~/.agent-egress-ca/sink/`: sink test CA (key never leaves this dir) and the sink leaf.

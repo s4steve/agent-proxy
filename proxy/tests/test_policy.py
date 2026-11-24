@@ -139,3 +139,69 @@ def test_real_policy_file_parses():
         pytest.skip("policy dir not mounted")
     p = P.parse(open(path).read())
     assert p.rule_for("api.anthropic.com").inspect is False and p.rule_for("evil.test") is None
+
+
+BROKER = """
+checks: [actions, github, sni_host, secrets, entropy]
+rules:
+  - {name: github, hosts: [gh-standin.test], github_owners: [me], allow_auth_header: true}
+  - {name: pkgs, hosts: [pypi-standin.test], methods: [GET]}
+credentials:
+  - {name: github, placeholder: PH-github, secret_file: SECRET_FILE, hosts: [gh-standin.test]}
+"""
+
+
+@pytest.fixture
+def broker(tmp_path, monkeypatch):
+    monkeypatch.delenv("POLICY_CHECKS", raising=False)
+    f = tmp_path / "github_token"
+    f.write_text(TOKEN + "\n")
+    return P.parse(BROKER.replace("SECRET_FILE", str(f)))
+
+
+def b64(s):
+    return base64.b64encode(s.encode()).decode()
+
+
+def test_broker_injects_bearer_and_basic_for_its_hosts_only(broker):
+    hdrs = [("authorization", "token PH-github"), ("user-agent", "PH-github-ua")]
+    out, used = P.inject(broker, req("gh-standin.test", "/repos/me/x", headers=hdrs))
+    assert used == ["github"] and out == [("authorization", f"token {TOKEN}"), ("user-agent", "PH-github-ua")]
+    basic = [("Authorization", "Basic " + b64("x-access-token:PH-github"))]
+    out, _ = P.inject(broker, req("gh-standin.test", "/me/x.git/info/refs?service=git-receive-pack", headers=basic))
+    assert base64.b64decode(out[0][1][6:]).decode() == f"x-access-token:{TOKEN}"
+    assert P.inject(broker, req("pypi-standin.test", headers=hdrs)) == (hdrs, [])
+
+
+def test_broker_needs_the_secret_file(broker):
+    broker.credentials[0].secret_file = "/nonexistent"
+    hdrs = [("authorization", "token PH-github")]
+    assert P.inject(broker, req("gh-standin.test", headers=hdrs)) == (hdrs, [])
+
+
+@pytest.mark.parametrize("checks", ["none", "all"])
+def test_broker_never_lends_to_an_action_its_rule_denies(monkeypatch, tmp_path, checks):
+    # Found in the M5 hosts-only replay: an issue on another owner's repo got the real token.
+    monkeypatch.setenv("POLICY_CHECKS", checks)
+    f = tmp_path / "t"
+    f.write_text(TOKEN)
+    pol = P.parse(BROKER.replace("SECRET_FILE", str(f)))
+    hdrs = [("authorization", "Bearer PH-github")]
+    for r in (req("gh-standin.test", "/repos/upstream-org/slugify/issues", "POST", headers=hdrs),
+              req("gh-standin.test", "/gists", "POST", headers=hdrs),
+              req("gh-standin.test", "/attacker/x.git/git-receive-pack", "POST", headers=hdrs)):
+        assert P.inject(pol, r) == (hdrs, [])
+
+
+@pytest.mark.parametrize("r,flagged", [
+    (req("gh-standin.test", "/repos/me/x", headers=[("authorization", "token PH-github")]), False),
+    (req("pypi-standin.test", "/simple/", headers=[("authorization", "Basic " + b64("__token__:PH-github"))]), True),
+    (req("pypi-standin.test", "/pypi/slugify-PH-github/json"), True),
+    (req("gh-standin.test", "/repos/me/x/issues", "POST", body=b'{"body": "PH-github"}'), True),  # not in a header
+    (req("gh-standin.test", "/x", headers=[("x-note", "PH-github")]), True),
+])
+def test_placeholder_outside_its_header_and_hosts_is_flagged(broker, r, flagged):
+    rule = broker.rule_for(r.dest)
+    assert ("broker_placeholder" in P.placeholder_hits(broker, r, rule)) is flagged
+    if flagged:
+        assert P.decide(broker, r)[1] == "deny"

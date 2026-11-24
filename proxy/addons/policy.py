@@ -13,7 +13,7 @@ import math
 import os
 import re
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
@@ -58,9 +58,30 @@ class Rule:
 
 
 @dataclass
+class Credential:
+    """A secret only the proxy holds (M5). The agent holds `placeholder` instead; the proxy swaps
+    it for the secret in `headers` on requests to `hosts` that the policy allows, and nowhere else."""
+    name: str
+    placeholder: str
+    secret_file: str
+    hosts: list[str]
+    headers: list[str] = field(default_factory=lambda: ["authorization"])
+
+    def matches(self, host: str) -> bool:
+        return Rule(self.name, self.hosts).matches(host)
+
+    def secret(self) -> str | None:
+        try:
+            return Path(self.secret_file).read_text().strip() or None
+        except OSError:
+            return None
+
+
+@dataclass
 class Policy:
     rules: list[Rule]
     checks: frozenset[str]
+    credentials: list[Credential] = field(default_factory=list)
 
     def rule_for(self, host: str) -> Rule | None:
         return next((r for r in self.rules if r.matches(host)), None)
@@ -73,7 +94,8 @@ def parse(text: str) -> Policy:
                        () if env == "none" else env.split(","))
     if unknown := checks - set(ALL_CHECKS):
         raise ValueError(f"unknown checks: {sorted(unknown)}")
-    return Policy([Rule(**r) for r in d.get("rules", [])], checks)
+    return Policy([Rule(**r) for r in d.get("rules", [])], checks,
+                  [Credential(**c) for c in d.get("credentials", [])])
 
 
 class PolicyFile:
@@ -187,6 +209,59 @@ def detect(req: Request, rule: Rule | None) -> list[str]:
     return hits
 
 
+def placeholder_hits(policy: Policy, req: Request, rule: Rule | None) -> list[str]:
+    """A credential placeholder anywhere except an injectable header to that credential's hosts.
+    The placeholder is worthless to an attacker, but sending it elsewhere shows intent."""
+    if rule is not None and not rule.inspect:
+        return []
+    hits = []
+    for c in policy.credentials:
+        allowed = c.matches(req.dest)
+        other = url_texts(req.path) + [req.body[:BODY_SCAN_LIMIT].decode("utf-8", "replace")]
+        other += [basic_auth_text(v) for k, v in req.headers if not (allowed and k.lower() in c.headers)]
+        if any(c.placeholder in t for t in other):
+            hits.append("broker_placeholder")
+    return hits
+
+
+def _swap(value: str, old: str, new: str) -> str:
+    if value[:6].lower() == "basic ":
+        try:
+            raw = base64.b64decode(value[6:]).decode("utf-8")
+        except (binascii.Error, ValueError):
+            return value
+        return value[:6] + base64.b64encode(raw.replace(old, new).encode()).decode()
+    return value.replace(old, new)
+
+
+def lends_credential(policy: Policy, req: Request) -> bool:
+    """The rule's own methods, paths and GitHub owners, whatever `checks` says. The broker never
+    lends a credential to an action its rule doesn't allow, even while those checks are off."""
+    rule = policy.rule_for(req.dest)
+    if rule is None or (rule.methods and req.method.upper() not in rule.methods):
+        return False
+    if rule.paths and not any(fnmatch.fnmatchcase(urlsplit(req.path).path, p) for p in rule.paths):
+        return False
+    return rule.github_owners is None or github_allows(req.method, req.path, rule.github_owners)[0]
+
+
+def inject(policy: Policy, req: Request) -> tuple[list[tuple[str, str]], list[str]]:
+    """Swap placeholders for secrets in the credential's headers, for its hosts and its rule's
+    allowed actions only. Returns the new headers and the names of the credentials used."""
+    headers, used = req.headers, []
+    if not lends_credential(policy, req):
+        return headers, used
+    for c in policy.credentials:
+        if not c.matches(req.dest) or not any(k.lower() in c.headers and c.placeholder in basic_auth_text(v)
+                                              for k, v in headers):
+            continue
+        if (secret := c.secret()) is None:
+            continue
+        headers = [(k, _swap(v, c.placeholder, secret) if k.lower() in c.headers else v) for k, v in headers]
+        used.append(c.name)
+    return headers, used
+
+
 def check_of(hit: str) -> str:
     return hit if hit in ("sni_host", "entropy") else "secrets"
 
@@ -195,7 +270,7 @@ def decide(policy: Policy, req: Request) -> tuple[str | None, str, str, list[str
     """(rule name, "allow" | "deny", reason, detector hits). Hits are reported even when their
     check is off; only enabled checks deny."""
     rule = policy.rule_for(req.dest)
-    hits = detect(req, rule)
+    hits = detect(req, rule) + placeholder_hits(policy, req, rule)
     if rule is None:
         return None, "deny", "no rule for destination", hits
     on = policy.checks

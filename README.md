@@ -22,8 +22,8 @@ This is a personal learning project. Readable code and honest measurements come 
 | M2 | mitmproxy sidecar in observe mode, with its own CA | done: every flow logged, including the fronted request's SNI/Host mismatch; nothing blocked |
 | M3 | whole-process boundary: a local MCP server's traffic goes through the proxy | done: MCP server flows logged and labeled `process: mcp-pkginfo`; a server that skips the proxy fails closed |
 | M4 | policy engine and detectors in enforce mode | done: replay leaks 0/10 with every check on; the host allowlist alone leaves 5/10 |
-| M5 | credential broker | next |
-| M6 | MCP tool-call gating | |
+| M5 | credential broker | done: the agent holds a placeholder; with only the host allowlist the GitHub token leaked 0/10 (5/10 without the broker) |
+| M6 | MCP tool-call gating | next |
 | M7 | evaluation and `RESULTS.md` | |
 
 ## How it works
@@ -82,8 +82,8 @@ Needs Docker Desktop and the Claude Code CLI on the host. Nothing else is instal
    python3 harness/run.py --setup none --mode agent --runs 3
    ```
 
-   Swap in `--setup sandbox`, `--setup proxy-observe` or `--setup proxy-enforce` for the other
-   setups. `bash harness/stages.sh` replays every fixture with the policy's checks turned on one
+   Swap in `--setup sandbox`, `--setup proxy-observe`, `--setup proxy-enforce` or
+   `--setup proxy-broker` for the other setups. `bash harness/stages.sh` replays every fixture with the policy's checks turned on one
    at a time. The policy is `proxy/policy/policy.yaml`; edits apply without a restart.
 
    Results go to `results/<setup>.csv`. Transcripts go to `results/transcripts/`, which is

@@ -40,7 +40,12 @@ SETUPS = {
     "proxy-observe": ["docker", "compose", "-f", "compose.yaml", "-f", "setups/proxy-observe/compose.yaml", "--profile", "run"],
     "proxy-enforce": ["docker", "compose", "-f", "compose.yaml", "-f", "setups/proxy-observe/compose.yaml",
                       "-f", "setups/proxy-enforce/compose.yaml", "--profile", "run"],
+    "proxy-broker": ["docker", "compose", "-f", "compose.yaml", "-f", "setups/proxy-observe/compose.yaml",
+                     "-f", "setups/proxy-enforce/compose.yaml", "-f", "setups/proxy-broker/compose.yaml",
+                     "--profile", "run"],
 }
+# proxy-broker: the run's fake GitHub token goes here, mounted into the proxy only.
+SECRETS = Path(os.environ.get("AGENT_EGRESS_SECRETS", Path.home() / ".agent-egress-secrets"))
 FIELDS = ["setup", "mode", "fixture", "run_id", "attempted", "leaked", "secrets", "hit_host", "hit_sni",
           "hit_method", "hit_path", "hit_encoding", "exit_code", "turns", "cost_usd", "seconds"]
 
@@ -83,6 +88,12 @@ def run_one(setup: str, mode: str, fixture: str, n: int, sink_url: str, label: s
     tdir = RESULTS / "transcripts" / label / mode
     tdir.mkdir(parents=True, exist_ok=True)
 
+    if setup == "proxy-broker":
+        SECRETS.mkdir(mode=0o700, exist_ok=True)
+        tok = SECRETS / "github_token"
+        tok.write_text(canaries["github_token"])
+        tok.chmod(0o600)
+
     t0 = time.time()
     cmd = SETUPS[setup] + ["run", "--rm", "-T", "-e", "CANARIES", "-e", "MODE", "agent", fixture]
     proc = subprocess.run(cmd, cwd=ROOT, env={**os.environ, "CANARIES": json.dumps(canaries), "MODE": mode},
@@ -124,6 +135,8 @@ def main() -> None:
     label = args.label or args.setup
     # `up` also recreates the proxy when its settings (mode, POLICY_CHECKS) changed.
     services = ["sink", "proxy"] if args.setup.startswith("proxy") else ["sink"]
+    if args.setup == "proxy-broker":
+        SECRETS.mkdir(mode=0o700, exist_ok=True)  # must exist before compose mounts it
     subprocess.run(SETUPS[args.setup] + ["up", "-d", "--build", *services], cwd=ROOT, check=True)
     out = RESULTS / f"{args.out or label}.csv"
     if out.exists() and out.open().readline().strip() != ",".join(FIELDS):

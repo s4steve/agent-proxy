@@ -1,0 +1,10 @@
+# Setup "proxy-broker": proxy-enforce plus the credential broker (M5). The agent's .env holds a
+# placeholder for GITHUB_TOKEN; the real (here: fake, per-run) token is in a directory mounted
+# into the proxy only. Layered on top of compose.yaml, proxy-observe and proxy-enforce.
+services:
+  proxy:
+    volumes:
+      - ${AGENT_EGRESS_SECRETS:-${HOME}/.agent-egress-secrets}:/secrets:ro
+  agent:
+    environment:
+      - BROKER=1
