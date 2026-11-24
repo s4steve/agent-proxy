@@ -11,10 +11,24 @@ from mitmproxy.test import taddons, tflow
 import egress
 
 
+POLICY = """
+checks: [actions, github, sni_host, secrets, entropy]
+rules:
+  - {name: github, hosts: [gh-standin.test], github_owners: [me], allow_auth_header: true}
+  - {name: pkgs, hosts: [pypi-standin.test], methods: [GET, HEAD]}
+"""
+
+
 @pytest.fixture
 def log(tmp_path, monkeypatch):
     path = tmp_path / "flows.jsonl"
+    pol = tmp_path / "policy.yaml"
+    pol.write_text(POLICY)
     monkeypatch.setattr(egress, "LOG_PATH", path)
+    monkeypatch.setattr(egress, "POLICY_PATH", str(pol))
+    monkeypatch.setattr(egress, "_policy_file", None)
+    monkeypatch.setattr(egress, "MODE", "enforce")
+    monkeypatch.delenv("POLICY_CHECKS", raising=False)
     return path
 
 
@@ -25,6 +39,8 @@ def records(path):
 def make_flow(host, path="/", body=b"", headers=None):
     f = tflow.tflow(resp=True)
     f.request.host = host
+    f.server_conn.address = (host, 443)
+    f.client_conn.sni = host
     f.request.headers["host"] = host
     f.request.path = path
     f.request.content = body
@@ -94,3 +110,56 @@ def test_plain_http_label_is_logged_and_not_forwarded(log):
     assert records(log)[0]["process"] == "mcp-pkginfo"
     assert "proxy-authorization" not in f.request.headers
     assert egress.proxy_label({"proxy-authorization": "Basic !!notb64"}) is None
+
+
+def test_enforce_blocks_with_403_and_logs_reason_without_the_secret(log):
+    addon = egress.Egress()
+    token = "ghp_" + "a1B2c3D4e5" * 3 + "a1B2c3"
+    with taddons.context(addon):
+        f = make_flow("pypi-standin.test", f"/pypi/slugify-{token}/json")
+        addon.request(f)
+        addon.response(f)
+        ok = make_flow("pypi-standin.test", "/simple/requests/")
+        addon.request(ok)
+    assert f.response.status_code == 403 and ok.response.status_code == 200  # tflow's canned response
+    (rec,) = records(log)
+    assert rec["action"] == "block" and rec["decision"] == "deny" and rec["detector_hits"] == ["github_token"]
+    assert rec["path"] == "/pypi/<redacted>/json" and token not in log.read_text()
+
+
+def test_enforce_refuses_tunnels_to_unlisted_destinations(log):
+    addon = egress.Egress()
+    with taddons.context(addon):
+        c = make_flow("evil.test")
+        c.request.method = "CONNECT"
+        addon.http_connect(c)
+        c2 = make_flow("gh-standin.test")
+        c2.request.method = "CONNECT"
+        c2.response = None
+        addon.http_connect(c2)
+    assert c.response.status_code == 403 and c2.response is None
+    assert records(log)[0]["reason"] == "no rule for destination"
+
+
+def test_fronted_request_is_judged_by_destination_and_flagged(log):
+    addon = egress.Egress()
+    with taddons.context(addon):
+        f = make_flow("gh-standin.test", "/upload")  # tunnel to an allowed host...
+        f.request.headers["host"] = "evil.test"     # ...whose Host header names another
+        addon.request(f)
+        addon.response(f)
+    rec = records(log)[0]
+    assert rec["rule"] == "github" and rec["dest"] == "gh-standin.test" and rec["host"] == "evil.test"
+    assert rec["action"] == "block" and "sni_host" in rec["detector_hits"]
+
+
+def test_observe_mode_logs_the_decision_but_blocks_nothing(log, monkeypatch):
+    monkeypatch.setattr(egress, "MODE", "observe")
+    addon = egress.Egress()
+    with taddons.context(addon):
+        f = make_flow("gh-standin.test", "/gists", body=b"{}")
+        f.request.method = "POST"
+        addon.request(f)
+        addon.response(f)
+    rec = records(log)[0]
+    assert rec["decision"] == "deny" and rec["action"] == "allow" and f.response.status_code == 200

@@ -1,0 +1,6 @@
+# Setup "proxy-enforce": proxy-observe with the policy enforced (denied requests get a 403).
+# Layered on top: docker compose -f compose.yaml -f setups/proxy-observe/compose.yaml -f setups/proxy-enforce/compose.yaml
+services:
+  proxy:
+    environment:
+      - POLICY_MODE=enforce

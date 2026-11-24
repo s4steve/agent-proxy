@@ -21,8 +21,8 @@ This is a personal learning project. Readable code and honest measurements come 
 | M1 | Claude Code's built-in sandbox baseline | done: replay leaks 3/9, all through the allowed broad domain (gist, issue, fronting) |
 | M2 | mitmproxy sidecar in observe mode, with its own CA | done: every flow logged, including the fronted request's SNI/Host mismatch; nothing blocked |
 | M3 | whole-process boundary: a local MCP server's traffic goes through the proxy | done: MCP server flows logged and labeled `process: mcp-pkginfo`; a server that skips the proxy fails closed |
-| M4 | policy engine and detectors in enforce mode | next |
-| M5 | credential broker | |
+| M4 | policy engine and detectors in enforce mode | done: replay leaks 0/10 with every check on; the host allowlist alone leaves 5/10 |
+| M5 | credential broker | next |
 | M6 | MCP tool-call gating | |
 | M7 | evaluation and `RESULTS.md` | |
 
@@ -82,7 +82,9 @@ Needs Docker Desktop and the Claude Code CLI on the host. Nothing else is instal
    python3 harness/run.py --setup none --mode agent --runs 3
    ```
 
-   Swap in `--setup sandbox` or `--setup proxy-observe` for the other setups.
+   Swap in `--setup sandbox`, `--setup proxy-observe` or `--setup proxy-enforce` for the other
+   setups. `bash harness/stages.sh` replays every fixture with the policy's checks turned on one
+   at a time. The policy is `proxy/policy/policy.yaml`; edits apply without a restart.
 
    Results go to `results/<setup>.csv`. Transcripts go to `results/transcripts/`, which is
    gitignored.
@@ -117,7 +119,7 @@ bash ca/scripts/remove-trust.sh
 compose.yaml        agent + sink (the "none" setup); setups/ layer on top
 agent/              agent image and fixture entrypoint
 sink/               attacker server
-proxy/              mitmproxy image, egress addon and its tests
+proxy/              mitmproxy image, egress addon, policy engine, policy.yaml and tests
 ca/scripts/         sink CA creation and trust removal
 setups/             per-setup compose overrides and settings (sandbox, proxy-observe, proxy-port experiment)
 fixtures/           injection fixtures; _base/repo is the shared tiny project
@@ -126,3 +128,12 @@ tests/              scanner tests
 results/            CSV results per setup
 docs/               DESIGN.md, DECISIONS.md
 ```
+
+## License
+
+[PolyForm Noncommercial License 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0/).
+You may use, copy, modify and share this project for any noncommercial purpose, including
+personal study, research, hobby projects, and use by charities, schools and public bodies.
+Commercial use needs separate permission from the author. This is a source-available license,
+not an OSI open-source one. Third-party components (mitmproxy, Claude Code, Debian and Python
+packages) keep their own licenses.

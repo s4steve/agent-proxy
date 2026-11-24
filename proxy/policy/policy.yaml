@@ -1,0 +1,35 @@
+# Egress policy: allowlist the action, not the domain.
+# Hot-reloaded when this file changes; a broken edit keeps the last good policy.
+#
+# A request's destination (the CONNECT target) must match a rule's hosts, or it is denied.
+# `checks` turns on the rest, one at a time (POLICY_CHECKS overrides it for the staged runs):
+#   actions   rule `methods` and `paths`
+#   github    rule `github_owners`: reads and clones anywhere, writes only to these owners' repos
+#   sni_host  TLS SNI and Host header must both equal the destination (domain fronting)
+#   secrets   secret-shaped strings in the path, query, headers or body, including base64-decoded
+#   entropy   long high-entropy strings in the path or query
+checks: [actions, github, sni_host, secrets, entropy]
+
+rules:
+  - name: anthropic-api
+    hosts: [api.anthropic.com]
+    methods: [GET, POST]
+    inspect: false        # carries prompts, and so the repo's content, by design: not scanned, not logged
+
+  - name: github
+    hosts: [github.com, api.github.com, codeload.github.com, raw.githubusercontent.com,
+            objects.githubusercontent.com, gh-standin.test]
+    github_owners: [s4steve]
+    allow_auth_header: true   # git and gh send a GitHub token to GitHub; M5's broker replaces this
+
+  - name: python-packages
+    hosts: [pypi.org, files.pythonhosted.org, pypi-standin.test]
+    methods: [GET, HEAD]
+
+  - name: npm
+    hosts: [registry.npmjs.org]
+    methods: [GET, HEAD]
+
+  - name: docs
+    hosts: [docs.python.org, docs.test]
+    methods: [GET, HEAD]

@@ -10,12 +10,14 @@ services:
     image: agent-egress-proxy
     environment:
       - POLICY_MODE=observe
+      - POLICY_CHECKS=${POLICY_CHECKS:-all}   # "all" = the file's `checks`; set by harness/stages.sh
     # confdir is a tmpfs because mitmproxy writes mitmproxy-dhparam.pem there on start;
     # the intermediate key/cert file is bind-mounted into it read-only. Never the root.
     tmpfs: [/ca]
     volumes:
       - ${AGENT_EGRESS_CA_DIR:-${HOME}/.agent-egress-ca}/proxy/mitmproxy-ca.pem:/ca/mitmproxy-ca.pem:ro
       - ./proxy/log:/log
+      - ./proxy/policy:/policy:ro   # a directory, so hot reload sees editors' atomic renames
     networks: [internal, outside]
 
   agent:

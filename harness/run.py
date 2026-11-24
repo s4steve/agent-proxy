@@ -38,6 +38,8 @@ SETUPS = {
     "none": ["docker", "compose", "--profile", "run"],
     "sandbox": ["docker", "compose", "-f", "compose.yaml", "-f", "setups/sandbox/compose.yaml", "--profile", "run"],
     "proxy-observe": ["docker", "compose", "-f", "compose.yaml", "-f", "setups/proxy-observe/compose.yaml", "--profile", "run"],
+    "proxy-enforce": ["docker", "compose", "-f", "compose.yaml", "-f", "setups/proxy-observe/compose.yaml",
+                      "-f", "setups/proxy-enforce/compose.yaml", "--profile", "run"],
 }
 FIELDS = ["setup", "mode", "fixture", "run_id", "attempted", "leaked", "secrets", "hit_host", "hit_sni",
           "hit_method", "hit_path", "hit_encoding", "exit_code", "turns", "cost_usd", "seconds"]
@@ -73,12 +75,12 @@ def attempted(inputs: list[str], canaries: dict[str, str]) -> bool:
                for i in inputs)
 
 
-def run_one(setup: str, mode: str, fixture: str, n: int, sink_url: str) -> dict:
-    run_id = f"{setup}-{mode}-{fixture}-{n}-{uuid.uuid4().hex[:6]}"
+def run_one(setup: str, mode: str, fixture: str, n: int, sink_url: str, label: str) -> dict:
+    run_id = f"{label}-{mode}-{fixture}-{n}-{uuid.uuid4().hex[:6]}"
     canaries = generate()
     (RESULTS / "canaries").mkdir(parents=True, exist_ok=True)
     (RESULTS / "canaries" / f"{run_id}.json").write_text(json.dumps(canaries, indent=2))
-    tdir = RESULTS / "transcripts" / setup / mode
+    tdir = RESULTS / "transcripts" / label / mode
     tdir.mkdir(parents=True, exist_ok=True)
 
     t0 = time.time()
@@ -95,7 +97,7 @@ def run_one(setup: str, mode: str, fixture: str, n: int, sink_url: str) -> dict:
     inputs, result = tool_inputs(proc.stdout)
     first = hits[0] if hits else None
     return {
-        "setup": setup, "mode": mode, "fixture": fixture, "run_id": run_id,
+        "setup": label, "mode": mode, "fixture": fixture, "run_id": run_id,
         # replay always attempts; that is the point of it.
         "attempted": int(mode == "replay" or attempted(inputs, canaries) or bool(hits)), "leaked": int(bool(hits)),
         "secrets": ";".join(sorted({h.secret for h in hits})),
@@ -113,12 +115,17 @@ def main() -> None:
     ap.add_argument("--mode", choices=["agent", "replay"], default="agent")
     ap.add_argument("--runs", type=int, default=3)
     ap.add_argument("--fixture", action="append", help="default: every fixture")
+    ap.add_argument("--label", help="name for the CSV and the setup column (default: --setup)")
+    ap.add_argument("--out", help="CSV name under results/ (default: the label)")
     ap.add_argument("--sink-url", default=os.environ.get("SINK_URL", "http://127.0.0.1:8099"))
     args = ap.parse_args()
 
     fixtures = args.fixture or sorted(p.parent.name for p in (ROOT / "fixtures").glob("*/fixture.json"))
-    subprocess.run(SETUPS[args.setup] + ["up", "-d", "--build", "sink"], cwd=ROOT, check=True)
-    out = RESULTS / f"{args.setup}.csv"
+    label = args.label or args.setup
+    # `up` also recreates the proxy when its settings (mode, POLICY_CHECKS) changed.
+    services = ["sink", "proxy"] if args.setup.startswith("proxy") else ["sink"]
+    subprocess.run(SETUPS[args.setup] + ["up", "-d", "--build", *services], cwd=ROOT, check=True)
+    out = RESULTS / f"{args.out or label}.csv"
     if out.exists() and out.open().readline().strip() != ",".join(FIELDS):
         sys.exit(f"{out} has an old header; move it aside first")
     new = not out.exists()
@@ -128,7 +135,7 @@ def main() -> None:
             w.writeheader()
         for fx in fixtures:
             for n in range(args.runs):
-                row = run_one(args.setup, args.mode, fx, n, args.sink_url)
+                row = run_one(args.setup, args.mode, fx, n, args.sink_url, label)
                 w.writerow(row)
                 f.flush()
                 print(f"{fx:28} run {n}: attempted={row['attempted']} leaked={row['leaked']} "

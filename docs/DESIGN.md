@@ -34,7 +34,27 @@ Each setup is a compose override plus a harness entry (`SETUPS` in `harness/run.
 |---|---|
 | none | `compose.yaml` only. The agent has direct internet access |
 | sandbox | `setups/sandbox/`: Claude Code's sandbox through `--settings` (agent mode) or `srt` (replay), allowlist = gh-standin.test, strict |
-| proxy-observe | `setups/proxy-observe/`: agent on the `internal: true` network only, `*_PROXY` pointed at mitmproxy. Everything is inspected and logged, nothing blocked |
+| proxy-observe | `setups/proxy-observe/`: agent on the `internal: true` network only, `*_PROXY` pointed at mitmproxy. Everything is inspected and logged with the policy's decision; nothing is blocked |
+| proxy-enforce | `setups/proxy-enforce/` on top of proxy-observe: `POLICY_MODE=enforce`. Denied requests get a 403 from the proxy; CONNECTs to unlisted destinations are refused; non-HTTP inside a tunnel is killed |
+
+## Policy (M4)
+`proxy/policy/policy.yaml`, hot-reloaded (a broken edit keeps the last good policy). Logic is in
+`proxy/addons/policy.py`, pure functions; `egress.py` wires it into mitmproxy.
+
+1. **Destination allowlist, always on.** The destination is the CONNECT target, where the bytes
+   go, not the Host header. No matching rule: deny.
+2. `actions`: the rule's `methods` and `paths`.
+3. `github`: reads and clones (`git-upload-pack`) anywhere; pushes (`git-receive-pack`) and API
+   writes (`/repos/<owner>/...`) only for `github_owners`. Gists, `/graphql` and other writes: deny.
+4. `sni_host`: SNI and Host must equal the destination.
+5. `secrets`: secret-shaped strings (AWS, GitHub, Stripe, Slack, Anthropic, PEM) in the path,
+   query, headers or body (first 1 MiB), raw or base64-decoded. A rule's `allow_auth_header`
+   exempts the `Authorization` header (GitHub's own token to GitHub).
+6. `entropy`: tokens of 20+ chars at 4.3+ bits/char in the path or query.
+
+Detectors always run and their names are logged; `checks` decides which of them deny.
+`inspect: false` (api.anthropic.com) skips detectors entirely. Logged paths have flagged
+segments replaced with `<redacted>`.
 
 ## Trust
 - `~/.agent-egress-ca/sink/`: sink test CA (key never leaves this dir) and the sink leaf.

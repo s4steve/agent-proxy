@@ -1,0 +1,220 @@
+"""Egress policy: rules decide which actions are allowed; detectors look at what is being sent.
+
+Pure functions over plain values, so they can be tested without a proxy. egress.py wires them
+into mitmproxy. Request bodies and header values are scanned in memory and never logged.
+"""
+
+from __future__ import annotations
+
+import base64
+import binascii
+import fnmatch
+import math
+import os
+import re
+from collections import Counter
+from dataclasses import dataclass
+from pathlib import Path
+from urllib.parse import unquote, urlsplit
+
+from ruamel.yaml import YAML
+
+ALL_CHECKS = ("actions", "github", "sni_host", "secrets", "entropy")
+READ_METHODS = {"GET", "HEAD", "OPTIONS"}
+
+SECRET_PATTERNS = {
+    "aws_access_key": re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"),
+    "aws_secret_key": re.compile(r"(?i)aws_secret_access_key\s*[=:]\s*[A-Za-z0-9/+]{40}"),
+    "github_token": re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,})"),
+    "stripe_key": re.compile(r"\b[sr]k_live_[A-Za-z0-9]{20,}"),
+    "slack_token": re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}"),
+    "anthropic_key": re.compile(r"\bsk-ant-[A-Za-z0-9_-]{20,}"),
+    "private_key": re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+}
+B64_TOKEN = re.compile(r"[A-Za-z0-9+/_-]{16,}={0,2}")
+SPLIT = re.compile(r"[/?&=,;:\s]+")
+# ponytail: fixed threshold. Hex (max 4.0 bits/char) never trips it, so hashes and SHAs pass,
+# and hex-encoded secrets get through too. Tokens also need both upper- and lower-case letters
+# and no "." (base64 has neither problem): long lowercase wheel filenames such as
+# charset_normalizer-3.4.2-cp311-...-manylinux_2_17_aarch64.whl tripped it in the first enforce
+# work session. Base32 and lowercase-only encodings get through. Tune with M7's data.
+ENTROPY_MIN_LEN, ENTROPY_MIN_BITS = 20, 4.3
+BODY_SCAN_LIMIT = 1 << 20
+
+
+@dataclass
+class Rule:
+    name: str
+    hosts: list[str]
+    methods: list[str] | None = None
+    paths: list[str] | None = None
+    github_owners: list[str] | None = None
+    inspect: bool = True
+    allow_auth_header: bool = False
+
+    def matches(self, host: str) -> bool:
+        host = host.lower()
+        return any(host == h or (h.startswith("*.") and host.endswith(h[1:])) for h in self.hosts)
+
+
+@dataclass
+class Policy:
+    rules: list[Rule]
+    checks: frozenset[str]
+
+    def rule_for(self, host: str) -> Rule | None:
+        return next((r for r in self.rules if r.matches(host)), None)
+
+
+def parse(text: str) -> Policy:
+    d = YAML(typ="safe").load(text) or {}
+    env = os.environ.get("POLICY_CHECKS", "all")
+    checks = frozenset(d.get("checks", ALL_CHECKS) if env == "all" else
+                       () if env == "none" else env.split(","))
+    if unknown := checks - set(ALL_CHECKS):
+        raise ValueError(f"unknown checks: {sorted(unknown)}")
+    return Policy([Rule(**r) for r in d.get("rules", [])], checks)
+
+
+class PolicyFile:
+    """Reloads on mtime change. A bad edit keeps the previous policy (and reports it once)."""
+
+    def __init__(self, path: str | Path):
+        self.path = Path(path)
+        self.mtime = self.path.stat().st_mtime
+        self.policy = parse(self.path.read_text())  # no fallback at startup: fail closed
+        self.error: str | None = None
+
+    def get(self) -> Policy:
+        try:
+            mtime = self.path.stat().st_mtime
+            if mtime != self.mtime:
+                self.mtime = mtime
+                self.policy, self.error = parse(self.path.read_text()), None
+        except Exception as e:  # noqa: BLE001  keep enforcing the last good policy
+            self.error = f"{type(e).__name__}: {e}"
+        return self.policy
+
+
+def github_allows(method: str, path: str, owners: list[str]) -> tuple[bool, str]:
+    """Reads and clones anywhere; pushes and API writes only to `owners`' repos.
+
+    Works for github.com (/owner/repo/...) and api.github.com (/repos/owner/repo/...).
+    """
+    url = urlsplit(path)
+    parts = [p for p in url.path.split("/") if p]
+    owned = {o.lower() for o in owners}
+    if parts[-1:] == ["git-upload-pack"]:
+        return True, "git fetch"
+    if parts[-1:] == ["git-receive-pack"] or "service=git-receive-pack" in url.query:
+        ok = bool(parts) and parts[0].lower() in owned
+        return ok, "git push to own repo" if ok else "git push to another owner's repo"
+    if method.upper() in READ_METHODS:
+        return True, "read"
+    if parts[:1] == ["repos"] and len(parts) > 1 and parts[1].lower() in owned:
+        return True, "API write to own repo"
+    return False, "write outside own repos"
+
+
+def _decoded(text: str) -> list[str]:
+    """The text, plus the decoding of every base64-looking token in it (std and urlsafe)."""
+    out = [text]
+    for tok in B64_TOKEN.findall(text):
+        t = tok.rstrip("=").replace("-", "+").replace("_", "/")
+        try:
+            out.append(base64.b64decode(t + "=" * (-len(t) % 4)).decode("utf-8"))
+        except (binascii.Error, ValueError):
+            pass
+    return out
+
+
+def find_secrets(text: str) -> set[str]:
+    return {name for chunk in _decoded(text) for name, rx in SECRET_PATTERNS.items() if rx.search(chunk)}
+
+
+def entropy(s: str) -> float:
+    n = len(s)
+    return -sum(c / n * math.log2(c / n) for c in Counter(s).values()) if n else 0.0
+
+
+def high_entropy_tokens(text: str) -> list[str]:
+    return [t for t in SPLIT.split(text)
+            if len(t) >= ENTROPY_MIN_LEN and "." not in t and t.lower() != t and t.upper() != t
+            and entropy(t) >= ENTROPY_MIN_BITS]
+
+
+def url_texts(path: str) -> list[str]:
+    url = urlsplit(path)
+    # unquote, not parse_qsl: a raw "+" in a base64 value must stay a "+".
+    return [unquote(url.path)] + [unquote(kv.partition("=")[2]) for kv in url.query.split("&") if kv]
+
+
+def basic_auth_text(value: str) -> str:
+    if value[:6].lower() == "basic ":
+        try:
+            return value + " " + base64.b64decode(value[6:]).decode("utf-8", "replace")
+        except (binascii.Error, ValueError):
+            pass
+    return value
+
+
+@dataclass
+class Request:
+    method: str
+    dest: str            # where the bytes actually go: the CONNECT target / upstream host
+    host: str            # Host header
+    sni: str | None
+    path: str            # with query
+    headers: list[tuple[str, str]]
+    body: bytes = b""
+
+
+def detect(req: Request, rule: Rule | None) -> list[str]:
+    """Detector names that fired. Never returns the matched values."""
+    if rule is not None and not rule.inspect:
+        return []
+    hits = []
+    if req.host.lower() != req.dest.lower() or (req.sni and req.sni.lower() != req.dest.lower()):
+        hits.append("sni_host")
+    texts = url_texts(req.path)
+    texts += [basic_auth_text(v) for k, v in req.headers
+              if k.lower() not in {"host", "proxy-authorization"}
+              and not (k.lower() == "authorization" and rule and rule.allow_auth_header)]
+    texts.append(req.body[:BODY_SCAN_LIMIT].decode("utf-8", "replace"))
+    hits += sorted({s for t in texts for s in find_secrets(t)})
+    if any(high_entropy_tokens(t) for t in url_texts(req.path)):
+        hits.append("entropy")
+    return hits
+
+
+def check_of(hit: str) -> str:
+    return hit if hit in ("sni_host", "entropy") else "secrets"
+
+
+def decide(policy: Policy, req: Request) -> tuple[str | None, str, str, list[str]]:
+    """(rule name, "allow" | "deny", reason, detector hits). Hits are reported even when their
+    check is off; only enabled checks deny."""
+    rule = policy.rule_for(req.dest)
+    hits = detect(req, rule)
+    if rule is None:
+        return None, "deny", "no rule for destination", hits
+    on = policy.checks
+    if "actions" in on:
+        if rule.methods and req.method.upper() not in rule.methods:
+            return rule.name, "deny", f"method {req.method} not allowed", hits
+        if rule.paths and not any(fnmatch.fnmatchcase(urlsplit(req.path).path, p) for p in rule.paths):
+            return rule.name, "deny", "path not allowed", hits
+    if "github" in on and rule.github_owners is not None:
+        ok, why = github_allows(req.method, req.path, rule.github_owners)
+        if not ok:
+            return rule.name, "deny", why, hits
+    if blocking := [h for h in hits if check_of(h) in on]:
+        return rule.name, "deny", "detector: " + ",".join(blocking), hits
+    return rule.name, "allow", "", hits
+
+
+def redact_path(path: str) -> str:
+    """Path without query, with secret-shaped and high-entropy segments replaced, for the log."""
+    segs = urlsplit(path).path.split("/")
+    return "/".join("<redacted>" if s and (find_secrets(unquote(s)) or high_entropy_tokens(unquote(s))) else s
+                    for s in segs)
