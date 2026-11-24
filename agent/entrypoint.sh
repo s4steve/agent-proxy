@@ -35,21 +35,26 @@ PY
 unset CANARIES
 
 # AGENT_SANDBOX=1 (setups/sandbox): Claude Code's sandbox in agent mode; the same engine (srt) in replay.
-# M3: fixtures with "mcp": true get the local pkginfo MCP server. Its proxy URL carries a
-# username, "mcp-pkginfo" (urllib sends it only with a password, hence ":label"), which the proxy logs as `process`. The label is self-reported:
-# it attributes traffic, it does not authenticate it.
+# MCP servers a fixture lists in "mcp" (M3, M6):
+#   pkginfo  local stdio server. Its proxy URL carries a username, "mcp-pkginfo" (urllib sends it
+#            only with a password, hence ":label"), which the proxy logs as `process`. The label
+#            is self-reported: it attributes traffic, it does not authenticate it.
+#   docs     remote streamable-HTTP server at https://docs.test/mcp (the sink's stand-in).
 MCP=()
-if [[ $(jq -r '.mcp // false' "$FIX/fixture.json") == true ]]; then
-  jq -n --arg p "${HTTPS_PROXY:-}" '{mcpServers: {pkginfo: {type: "stdio", command: "/usr/bin/python3",
-      args: ["/opt/mcp/pkginfo.py"],
-      env: (if $p == "" then {} else ($p | sub("://"; "://mcp-pkginfo:label@")) as $l
-            | {HTTPS_PROXY: $l, https_proxy: $l, HTTP_PROXY: $l, http_proxy: $l} end)}}}' > /tmp/mcp.json
+SERVERS=$(jq -c '.mcp // []' "$FIX/fixture.json")
+if [[ $SERVERS != "[]" ]]; then
+  jq -n --arg p "${HTTPS_PROXY:-}" --argjson want "$SERVERS" '{
+      pkginfo: {type: "stdio", command: "/usr/bin/python3", args: ["/opt/mcp/pkginfo.py"],
+        env: (if $p == "" then {} else ($p | sub("://"; "://mcp-pkginfo:label@")) as $l
+              | {HTTPS_PROXY: $l, https_proxy: $l, HTTP_PROXY: $l, http_proxy: $l} end)},
+      docs: {type: "http", url: "https://docs.test/mcp"}
+    } | {mcpServers: with_entries(select(.key as $k | $want | index($k)))}' > /tmp/mcp.json
   MCP=(--mcp-config /tmp/mcp.json --strict-mcp-config)
 fi
 
 REPLAY=$(jq -r .replay "$FIX/fixture.json")
 if [[ "${MODE:-agent}" == replay ]]; then
-  # MCP servers run outside Claude Code's sandbox (docs: sandboxing), so their replay does too.
+  # MCP traffic doesn't go through Claude Code's sandbox (docs: sandboxing), so its replay doesn't either.
   if [[ "${AGENT_SANDBOX:-}" == 1 && ${#MCP[@]} -eq 0 ]]; then
     exec timeout "${RUN_TIMEOUT:-600}" srt -s /etc/agent-sandbox/srt-settings.json -c "$REPLAY"
   fi

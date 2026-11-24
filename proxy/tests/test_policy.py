@@ -205,3 +205,49 @@ def test_placeholder_outside_its_header_and_hosts_is_flagged(broker, r, flagged)
     assert ("broker_placeholder" in P.placeholder_hits(broker, r, rule)) is flagged
     if flagged:
         assert P.decide(broker, r)[1] == "deny"
+
+
+MCP_POLICY = """
+checks: [actions, github, mcp, sni_host, secrets, entropy]
+rules:
+  - {name: docs-mcp, hosts: [docs.test], paths: [/mcp], methods: [GET, POST, DELETE], mcp_tools: [search_docs]}
+  - {name: docs, hosts: [docs.test], methods: [GET, HEAD]}
+"""
+
+
+def call(tool, args, id_=1):
+    import json
+    return json.dumps({"jsonrpc": "2.0", "id": id_, "method": "tools/call",
+                       "params": {"name": tool, "arguments": args}}).encode()
+
+
+@pytest.mark.parametrize("checks,r,decision,reason", [
+    ("all", req("docs.test", "/mcp", "POST", body=call("search_docs", {"query": "slugify setup"})), "allow", ""),
+    ("all", req("docs.test", "/mcp", "POST", body=call("send_feedback", {"message": "x" * 40})), "deny",
+     "MCP tool send_feedback not allowed"),
+    ("actions", req("docs.test", "/mcp", "POST", body=call("send_feedback", {"message": "x"})), "allow", ""),
+    ("all", req("docs.test", "/mcp", "POST", body=call("search_docs", {"query": TOKEN})), "deny",
+     "detector: github_token"),                                              # allowed tool, secret argument
+    ("all", req("docs.test", "/mcp", "POST", body=b'{"jsonrpc":"2.0","id":0,"method":"initialize","params":{}}'),
+     "allow", ""),
+    ("all", req("docs.test", "/other", "POST"), "deny", "method POST not allowed"),  # falls to the `docs` rule
+    ("all", req("docs.test", "/pages/x.html"), "allow", ""),
+    ("all", req("evil.test", "/mcp", "POST", body=call("search_docs", {})), "deny", "no rule for destination"),
+])
+def test_mcp_gating(monkeypatch, checks, r, decision, reason):
+    monkeypatch.setenv("POLICY_CHECKS", checks)
+    pol = P.parse(MCP_POLICY)
+    assert P.decide(pol, r)[1:3] == (decision, reason)
+
+
+def test_mcp_calls_handles_batches_and_junk():
+    assert P.mcp_calls(b"[" + call("a", {}, 1) + b"," + call("b", {}, 2) + b"]") == [(1, "a"), (2, "b")]
+    assert P.mcp_calls(b"not json") == [] and P.mcp_calls(b'{"method":"tools/list","id":3}') == []
+
+
+def test_tools_list_is_filtered_to_allowed_tools():
+    import json
+    body = json.dumps({"jsonrpc": "2.0", "id": 2, "result": {"tools": [{"name": "search_docs"}, {"name": "send_feedback"}]}})
+    out = json.loads(P.filter_tools_list(body.encode(), ["search_docs"]))
+    assert [t["name"] for t in out["result"]["tools"]] == ["search_docs"] and out["id"] == 2
+    assert P.filter_tools_list(b'{"jsonrpc":"2.0","id":1,"result":{}}', ["search_docs"]) is None

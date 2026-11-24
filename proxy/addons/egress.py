@@ -102,6 +102,8 @@ def flow_record(flow: http.HTTPFlow) -> dict:
         "action": "block" if flow.metadata.get("blocked") else "allow",
         "detector_hits": hits,
         "brokered": flow.metadata.get("brokered", []),
+        "mcp_tools": [t for _, t in policy.mcp_calls(req.get_content(strict=False) or b"")]
+        if req.method == "POST" and flow.metadata.get("mcp_tools") is not None else None,
     }
     if (dest := dest_of(flow)) != host:
         rec["dest"] = dest
@@ -120,8 +122,13 @@ def flow_record(flow: http.HTTPFlow) -> dict:
 
 def block(flow: http.HTTPFlow, reason: str) -> None:
     flow.metadata["blocked"] = True
-    flow.response = http.Response.make(403, f"blocked by agent egress policy: {reason}\n",
-                                       {"content-type": "text/plain"})
+    msg = f"blocked by agent egress policy: {reason}"
+    calls = policy.mcp_calls(flow.request.get_content(strict=False) or b"") if flow.request.method == "POST" else []
+    if calls:  # an MCP tools/call: answer in JSON-RPC so the client reports a tool error, not a dead server
+        body = json.dumps({"jsonrpc": "2.0", "id": calls[0][0], "error": {"code": -32001, "message": msg}})
+        flow.response = http.Response.make(200, body, {"content-type": "application/json"})
+    else:
+        flow.response = http.Response.make(403, msg + "\n", {"content-type": "text/plain"})
 
 
 class Egress:
@@ -165,6 +172,10 @@ class Egress:
         pol = current_policy()
         rule, decision, reason, hits = policy.decide(pol, to_request(flow))
         flow.metadata["decision"] = (rule, decision, reason, hits)
+        matched = pol.rule_for(dest_of(flow), flow.request.path)
+        # Filtering tools/list changes what the agent sees, so it's enforce-only like blocking.
+        if matched and matched.mcp_tools is not None and "mcp" in pol.checks and MODE == "enforce":
+            flow.metadata["mcp_tools"] = matched.mcp_tools
         if decision == "deny":
             if MODE == "enforce":
                 block(flow, reason)
@@ -196,6 +207,12 @@ class Egress:
 
     def response(self, flow: http.HTTPFlow) -> None:
         self._scrub(flow)
+        allowed = flow.metadata.get("mcp_tools")
+        if allowed is not None and not flow.response.stream and \
+                flow.response.headers.get("content-type", "").startswith("application/json"):
+            if (new := policy.filter_tools_list(flow.response.content or b"", allowed)) is not None:
+                flow.response.content = new
+                flow.metadata["mcp_filtered"] = True
         _write({"event": "flow", **flow_record(flow)})
 
     def error(self, flow: http.HTTPFlow) -> None:

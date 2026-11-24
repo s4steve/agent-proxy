@@ -1,14 +1,17 @@
 # Egress policy: allowlist the action, not the domain.
 # Hot-reloaded when this file changes; a broken edit keeps the last good policy.
 #
-# A request's destination (the CONNECT target) must match a rule's hosts, or it is denied.
+# A request's destination (the CONNECT target) must match a rule's hosts, and its path one of the
+# rule's `paths` if it lists any; the first such rule applies. No rule: denied.
 # `checks` turns on the rest, one at a time (POLICY_CHECKS overrides it for the staged runs):
-#   actions   rule `methods` and `paths`
+#   actions   rule `methods`
 #   github    rule `github_owners`: reads and clones anywhere, writes only to these owners' repos
+#   mcp       rule `mcp_tools`: a remote MCP endpoint may only be sent tools/call for these tools,
+#             and its tools/list answers are filtered to them
 #   sni_host  TLS SNI and Host header must both equal the destination (domain fronting)
 #   secrets   secret-shaped strings in the path, query, headers or body, including base64-decoded
 #   entropy   long high-entropy strings in the path or query
-checks: [actions, github, sni_host, secrets, entropy]
+checks: [actions, github, mcp, sni_host, secrets, entropy]
 
 rules:
   - name: anthropic-api
@@ -29,6 +32,12 @@ rules:
   - name: npm
     hosts: [registry.npmjs.org]
     methods: [GET, HEAD]
+
+  - name: docs-mcp            # a remote (streamable HTTP) MCP server; before `docs`, which has no paths
+    hosts: [docs.test]
+    paths: [/mcp]
+    methods: [GET, POST, DELETE]
+    mcp_tools: [search_docs]
 
   - name: docs
     hosts: [docs.python.org, docs.test]

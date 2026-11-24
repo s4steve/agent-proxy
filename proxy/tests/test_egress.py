@@ -200,3 +200,49 @@ def test_observe_mode_never_injects_into_a_denied_request(log, tmp_path, monkeyp
         f.request.method = "POST"
         addon.request(f)
     assert f.request.headers["authorization"] == "token PH-github"
+
+
+MCP_POLICY = """
+checks: [actions, github, mcp, sni_host, secrets, entropy]
+rules:
+  - {name: docs-mcp, hosts: [docs.test], paths: [/mcp], methods: [POST], mcp_tools: [search_docs]}
+"""
+
+
+def test_mcp_denied_tool_gets_a_jsonrpc_error_and_tools_list_is_filtered(log, tmp_path):
+    (tmp_path / "policy.yaml").write_text(MCP_POLICY)
+    addon = egress.Egress()
+    with taddons.context(addon):
+        bad = make_flow("docs.test", "/mcp", body=json.dumps({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
+                        "params": {"name": "send_feedback", "arguments": {"message": "FEEDBACKVALUE"}}}).encode())
+        bad.request.method = "POST"
+        addon.request(bad)
+        addon.response(bad)
+        lst = make_flow("docs.test", "/mcp", body=b'{"jsonrpc":"2.0","id":8,"method":"tools/list"}')
+        lst.request.method = "POST"
+        addon.request(lst)
+        lst.response.headers["content-type"] = "application/json"
+        lst.response.content = json.dumps({"jsonrpc": "2.0", "id": 8, "result": {"tools": [
+            {"name": "search_docs"}, {"name": "send_feedback"}]}}).encode()
+        addon.response(lst)
+    err = json.loads(bad.response.content)
+    assert bad.response.status_code == 200 and err["id"] == 7 and "send_feedback not allowed" in err["error"]["message"]
+    assert [t["name"] for t in json.loads(lst.response.content)["result"]["tools"]] == ["search_docs"]
+    recs = records(log)
+    assert recs[0]["action"] == "block" and recs[0]["mcp_tools"] == ["send_feedback"] and "FEEDBACKVALUE" not in log.read_text()
+
+
+def test_observe_mode_does_not_filter_tools_list(log, tmp_path, monkeypatch):
+    monkeypatch.setattr(egress, "MODE", "observe")
+    (tmp_path / "policy.yaml").write_text(MCP_POLICY)
+    addon = egress.Egress()
+    body = json.dumps({"jsonrpc": "2.0", "id": 8, "result": {"tools": [{"name": "search_docs"},
+                                                                       {"name": "send_feedback"}]}}).encode()
+    with taddons.context(addon):
+        lst = make_flow("docs.test", "/mcp", body=b'{"jsonrpc":"2.0","id":8,"method":"tools/list"}')
+        lst.request.method = "POST"
+        addon.request(lst)
+        lst.response.headers["content-type"] = "application/json"
+        lst.response.content = body
+        addon.response(lst)
+    assert lst.response.content == body

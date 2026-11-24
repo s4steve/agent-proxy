@@ -4,7 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 checks=""
-for stage in none actions github sni_host secrets entropy; do
+for stage in none actions github mcp sni_host secrets entropy; do
   [[ $stage != none ]] && checks="${checks:+$checks,}$stage"
   echo "== stage: hosts${checks:+ + $checks}" >&2
   POLICY_CHECKS="${checks:-none}" python3 harness/run.py --setup proxy-enforce --mode replay --runs 1 \

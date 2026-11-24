@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import binascii
 import fnmatch
+import json
 import math
 import os
 import re
@@ -19,7 +20,7 @@ from urllib.parse import unquote, urlsplit
 
 from ruamel.yaml import YAML
 
-ALL_CHECKS = ("actions", "github", "sni_host", "secrets", "entropy")
+ALL_CHECKS = ("actions", "github", "mcp", "sni_host", "secrets", "entropy")
 READ_METHODS = {"GET", "HEAD", "OPTIONS"}
 
 SECRET_PATTERNS = {
@@ -49,12 +50,17 @@ class Rule:
     methods: list[str] | None = None
     paths: list[str] | None = None
     github_owners: list[str] | None = None
+    mcp_tools: list[str] | None = None   # M6: remote MCP endpoint; tools/call only for these tools
     inspect: bool = True
     allow_auth_header: bool = False
 
     def matches(self, host: str) -> bool:
         host = host.lower()
         return any(host == h or (h.startswith("*.") and host.endswith(h[1:])) for h in self.hosts)
+
+    def covers(self, host: str, path: str) -> bool:
+        """Host matches and, if the rule lists `paths`, the bare path matches one of them."""
+        return self.matches(host) and (not self.paths or any(fnmatch.fnmatchcase(path, p) for p in self.paths))
 
 
 @dataclass
@@ -83,8 +89,12 @@ class Policy:
     checks: frozenset[str]
     credentials: list[Credential] = field(default_factory=list)
 
-    def rule_for(self, host: str) -> Rule | None:
-        return next((r for r in self.rules if r.matches(host)), None)
+    def rule_for(self, host: str, path: str | None = None) -> Rule | None:
+        """First rule covering host and path. Without a path (a CONNECT), any rule for the host."""
+        if path is None:
+            return next((r for r in self.rules if r.matches(host)), None)
+        bare = urlsplit(path).path
+        return next((r for r in self.rules if r.covers(host, bare)), None)
 
 
 def parse(text: str) -> Policy:
@@ -237,10 +247,10 @@ def _swap(value: str, old: str, new: str) -> str:
 def lends_credential(policy: Policy, req: Request) -> bool:
     """The rule's own methods, paths and GitHub owners, whatever `checks` says. The broker never
     lends a credential to an action its rule doesn't allow, even while those checks are off."""
-    rule = policy.rule_for(req.dest)
+    rule = policy.rule_for(req.dest, req.path)
     if rule is None or (rule.methods and req.method.upper() not in rule.methods):
         return False
-    if rule.paths and not any(fnmatch.fnmatchcase(urlsplit(req.path).path, p) for p in rule.paths):
+    if rule.mcp_tools is not None and any(t not in rule.mcp_tools for _, t in mcp_calls(req.body)):
         return False
     return rule.github_owners is None or github_allows(req.method, req.path, rule.github_owners)[0]
 
@@ -269,20 +279,22 @@ def check_of(hit: str) -> str:
 def decide(policy: Policy, req: Request) -> tuple[str | None, str, str, list[str]]:
     """(rule name, "allow" | "deny", reason, detector hits). Hits are reported even when their
     check is off; only enabled checks deny."""
-    rule = policy.rule_for(req.dest)
+    rule = policy.rule_for(req.dest, req.path)
     hits = detect(req, rule) + placeholder_hits(policy, req, rule)
     if rule is None:
-        return None, "deny", "no rule for destination", hits
+        return None, "deny", "no rule for destination" if policy.rule_for(req.dest) is None else "no rule for path", hits
     on = policy.checks
     if "actions" in on:
         if rule.methods and req.method.upper() not in rule.methods:
             return rule.name, "deny", f"method {req.method} not allowed", hits
-        if rule.paths and not any(fnmatch.fnmatchcase(urlsplit(req.path).path, p) for p in rule.paths):
-            return rule.name, "deny", "path not allowed", hits
     if "github" in on and rule.github_owners is not None:
         ok, why = github_allows(req.method, req.path, rule.github_owners)
         if not ok:
             return rule.name, "deny", why, hits
+    if "mcp" in on and rule.mcp_tools is not None:
+        for _, tool in mcp_calls(req.body):
+            if tool not in rule.mcp_tools:
+                return rule.name, "deny", f"MCP tool {tool} not allowed", hits
     if blocking := [h for h in hits if check_of(h) in on]:
         return rule.name, "deny", "detector: " + ",".join(blocking), hits
     return rule.name, "allow", "", hits
@@ -293,3 +305,32 @@ def redact_path(path: str) -> str:
     segs = urlsplit(path).path.split("/")
     return "/".join("<redacted>" if s and (find_secrets(unquote(s)) or high_entropy_tokens(unquote(s))) else s
                     for s in segs)
+
+
+def _jsonrpc(body: bytes) -> list[dict]:
+    try:
+        msg = json.loads(body)
+    except ValueError:
+        return []
+    return [m for m in (msg if isinstance(msg, list) else [msg]) if isinstance(m, dict)]
+
+
+def mcp_calls(body: bytes) -> list[tuple[object, str]]:
+    """(JSON-RPC id, tool name) for each tools/call in an MCP request body (single or batch)."""
+    return [(m.get("id"), str((m.get("params") or {}).get("name"))) for m in _jsonrpc(body)
+            if m.get("method") == "tools/call"]
+
+
+def filter_tools_list(body: bytes, allowed: list[str]) -> bytes | None:
+    """A JSON tools/list response with only the allowed tools, or None if there's nothing to change.
+    The agent never learns about tools it can't call. SSE responses aren't filtered."""
+    msgs, changed = _jsonrpc(body), False
+    for m in msgs:
+        tools = (m.get("result") or {}).get("tools") if isinstance(m.get("result"), dict) else None
+        if isinstance(tools, list):
+            kept = [t for t in tools if isinstance(t, dict) and t.get("name") in allowed]
+            changed |= len(kept) != len(tools)
+            m["result"]["tools"] = kept
+    if not changed:
+        return None
+    return json.dumps(msgs if body.lstrip()[:1] == b"[" else msgs[0]).encode()

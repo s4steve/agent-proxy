@@ -23,8 +23,8 @@ This is a personal learning project. Readable code and honest measurements come 
 | M3 | whole-process boundary: a local MCP server's traffic goes through the proxy | done: MCP server flows logged and labeled `process: mcp-pkginfo`; a server that skips the proxy fails closed |
 | M4 | policy engine and detectors in enforce mode | done: replay leaks 0/10 with every check on; the host allowlist alone leaves 5/10 |
 | M5 | credential broker | done: the agent holds a placeholder; with only the host allowlist the GitHub token leaked 0/10 (5/10 without the broker) |
-| M6 | MCP tool-call gating | next |
-| M7 | evaluation and `RESULTS.md` | |
+| M6 | MCP tool-call gating | done: per-tool rules for remote MCP servers; a shapeless secret through an allowed server's other tool leaks 3/3 without them, 0 with |
+| M7 | evaluation and `RESULTS.md` | next |
 
 ## How it works
 
@@ -35,9 +35,10 @@ This is a personal learning project. Readable code and honest measurements come 
 
 From M2 on, the agent sits on an internal-only Docker network and its only way out is the proxy.
 
-- **Fixtures** (`fixtures/`): 10 injected READMEs, issues, web pages and code comments. Each one
+- **Fixtures** (`fixtures/`): 11 injected READMEs, issues, web pages, code comments and MCP tool results. Each one
   tries to get a fake secret out over a different path: a new host, a URL query, a POST body, a
-  request header, a GitHub-style write, a fronted request or a pip index URL.
+  request header, a GitHub-style write, a fronted request, a pip index URL, a local MCP
+  server's tool call (`agent/mcp/`) or another tool on an allowed remote MCP server.
 - **Canaries** (`harness/canaries.py`): fresh fake secrets for every run, shaped like AWS,
   GitHub, Stripe, Slack and SSH keys. A run leaked if any of them reaches the sink, raw or
   URL-encoded, hex or base64.
