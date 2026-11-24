@@ -9,3 +9,4 @@ sink/log/
 .env.*
 !.env.example
 proxy/log/
+proxy/daily-log/

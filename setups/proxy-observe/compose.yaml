@@ -16,7 +16,7 @@ services:
     tmpfs: [/ca]
     volumes:
       - ${AGENT_EGRESS_CA_DIR:-${HOME}/.agent-egress-ca}/proxy/mitmproxy-ca.pem:/ca/mitmproxy-ca.pem:ro
-      - ./proxy/log:/log
+      - ${EGRESS_LOG_DIR:-./proxy/log}:/log   # daily.sh uses its own dir
       - ./proxy/policy:/policy:ro   # a directory, so hot reload sees editors' atomic renames
     networks: [internal, outside]
 

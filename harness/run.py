@@ -138,6 +138,15 @@ def main() -> None:
     if args.setup == "proxy-broker":
         SECRETS.mkdir(mode=0o700, exist_ok=True)  # must exist before compose mounts it
     subprocess.run(SETUPS[args.setup] + ["up", "-d", "--build", *services], cwd=ROOT, check=True)
+    if "proxy" in services:  # `up` may have just recreated it; the first run must not race its start
+        probe = "import socket; socket.create_connection(('127.0.0.1', 8080), 1)"
+        for _ in range(30):
+            if subprocess.run(SETUPS[args.setup] + ["exec", "-T", "proxy", "python3", "-c", probe], cwd=ROOT,
+                              capture_output=True).returncode == 0:
+                break
+            time.sleep(1)
+        else:
+            sys.exit("proxy did not start listening")
     out = RESULTS / f"{args.out or label}.csv"
     if out.exists() and out.open().readline().strip() != ",".join(FIELDS):
         sys.exit(f"{out} has an old header; move it aside first")

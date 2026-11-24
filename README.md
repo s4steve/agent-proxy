@@ -24,7 +24,7 @@ This is a personal learning project. Readable code and honest measurements come 
 | M4 | policy engine and detectors in enforce mode | done: replay leaks 0/10 with every check on; the host allowlist alone leaves 5/10 |
 | M5 | credential broker | done: the agent holds a placeholder; with only the host allowlist the GitHub token leaked 0/10 (5/10 without the broker) |
 | M6 | MCP tool-call gating | done: per-tool rules for remote MCP servers; a shapeless secret through an allowed server's other tool leaks 3/3 without them, 0 with |
-| M7 | evaluation and `RESULTS.md` | next |
+| M7 | evaluation and [`RESULTS.md`](RESULTS.md) | done except the week of real use (`bin/daily.sh`): replay leaks 33/33 → sandbox 15/33 → enforce 0/33; about +4 ms per request |
 
 ## How it works
 
@@ -90,7 +90,24 @@ Needs Docker Desktop and the Claude Code CLI on the host. Nothing else is instal
    Results go to `results/<setup>.csv`. Transcripts go to `results/transcripts/`, which is
    gitignored.
 
-4. Tests:
+4. Report, latency, and the false-positive study:
+
+   ```bash
+   python3 harness/report.py
+   ```
+
+   ```bash
+   bash harness/latency.sh
+   ```
+
+   ```bash
+   bin/daily.sh ~/path/to/a/personal/repo
+   ```
+
+   `daily.sh` runs Claude Code interactively behind the proxy in observe mode, logging to
+   `proxy/daily-log/`. Add `--daily proxy/daily-log/flows.jsonl` to the report after a week.
+
+5. Tests:
 
    ```bash
    python3 -m unittest tests/test_scan.py
@@ -124,7 +141,8 @@ proxy/              mitmproxy image, egress addon, policy engine, policy.yaml an
 ca/scripts/         sink CA creation and trust removal
 setups/             per-setup compose overrides and settings (sandbox, proxy-observe, proxy-port experiment)
 fixtures/           injection fixtures; _base/repo is the shared tiny project
-harness/            canaries, leak scanner, runner
+harness/            canaries, leak scanner, runner, staged runs, latency, report
+bin/daily.sh        real use behind the proxy (observe mode), for the false-positive study
 tests/              scanner tests
 results/            CSV results per setup
 docs/               DESIGN.md, DECISIONS.md
