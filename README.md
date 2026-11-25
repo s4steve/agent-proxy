@@ -50,7 +50,8 @@ From M2 on, the agent sits on an internal-only Docker network and its only way o
 - **`gh-standin.test`** stands in for github.com. Tests never write to real public services.
 
 [docs/dataflow.html](docs/dataflow.html) is a diagram of how a request flows through the system
-(open it in a browser). See [docs/DESIGN.md](docs/DESIGN.md) for the full design and
+(open it in a browser). [docs/ENTERPRISE.md](docs/ENTERPRISE.md) covers deploying it for many developers
+and other agents (Codex, Cursor, Antigravity). See [docs/DESIGN.md](docs/DESIGN.md) for the full design and
 [docs/DECISIONS.md](docs/DECISIONS.md) for the doc checks, decisions and findings.
 
 ## Running it
@@ -146,7 +147,7 @@ harness/            canaries, leak scanner, runner, staged runs, latency, report
 bin/daily.sh        real use behind the proxy (observe mode), for the false-positive study
 tests/              scanner tests
 results/            CSV results per setup
-docs/               DESIGN.md, DECISIONS.md, dataflow.html (diagram)
+docs/               DESIGN.md, DECISIONS.md, ENTERPRISE.md, dataflow.html (diagram)
 ```
 
 ## License
