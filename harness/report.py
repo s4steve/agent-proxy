@@ -15,7 +15,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 RESULTS = Path(__file__).resolve().parent.parent / "results"
-SETUPS = ["none", "sandbox", "proxy-observe", "proxy-enforce", "proxy-broker"]
+SETUPS = ["none", "sandbox", "proxy-observe", "proxy-enforce", "proxy-broker", "proxy-dns"]
 
 
 def rows(name: str) -> list[dict]:

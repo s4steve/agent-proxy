@@ -40,6 +40,32 @@ Two things follow from "no route and no DNS":
 - **DNS can't be used to exfiltrate**, because the agent can't resolve names; the proxy does.
 - **The proxy must not become a route into your own network.** See SSRF in section 4.
 
+### Steering with DNS instead of proxy settings
+
+For agents that ignore proxy settings, DNS can do the steering: the agent's only resolver
+answers every name the policy allows with the proxy's address, and nothing else; the proxy
+accepts those connections in transparent mode. **Prototype, tested** in
+[setups/proxy-dns](../setups/proxy-dns/README.md) with [dns-cache](https://github.com/s4steve/dns-cache):
+Claude Code ran with no proxy variables, Node's built-in `fetch` (which ignores `HTTPS_PROXY`)
+was caught, and replay leaked 0/33. Cursor and Antigravity were not tested in it.
+
+A resolver that answers the agent reopens DNS as a way out unless it answers far less than a
+normal one. The ways around it, and what closes each:
+
+| bypass | what closes it |
+|---|---|
+| **Tunneling through the resolver**: `<encoded secret>.evil.com` reaches the attacker's name server via forwarding | Answer only from local records; never forward for the agent's view. Blocklists don't help (any unlisted name works), and neither do encrypted upstreams |
+| **Allowed domains whose subdomains an attacker can delegate** | Exact names only, no "domain and all subdomains" allow rules |
+| **Another resolver**: hard-coded 8.8.8.8, DoT, DoQ, DoH over 443 | No route except to the proxy and the resolver; keep DoH endpoints off the proxy's allowlist |
+| **The client picks the IP**: connect to the attacker's address with an allowed SNI | The proxy connects to the name it judged, never to the address the client dialled. This is the new risk transparent mode brings; the prototype tests it |
+| **ECH and HTTP/3 hints** in `HTTPS`/`SVCB` records | Records-only answers carry none; don't route UDP 443 |
+| **Private or rebinding answers** | The agent only ever sees the proxy's address; the proxy still needs its SSRF check |
+| **Spoofing another client's address** to land in a laxer view | Drop `NET_RAW` in the agent; keep agents alone in their address range |
+| **The resolver as a second way out** | Run the agent's resolver with no route out at all: a records-only view needs no upstream |
+
+Exact-name records mean every hostname a tool uses must be listed; a missing one breaks the
+tool, it doesn't leak. Generate the records from the policy so the two can't drift.
+
 ## 2. One proxy per developer, or a central one?
 
 Both work. What changes is where the CA key, the policy, the logs and the real tokens live.
@@ -216,6 +242,8 @@ vary by agent:
 5. **Where do its tools run?** Locally, in a remote dev environment, or in the vendor's cloud?
    A vendor-cloud agent never touches your proxy.
 
+For agents that ignore proxy settings, the DNS steering above is the fix to test first.
+
 Run the agent behind the proxy in observe mode for a day and look for `tls_failed_client`
 events and destinations you didn't expect. The DECISIONS.md tools table is the place to
 record what you find.
@@ -248,6 +276,7 @@ In order of importance for a central deployment:
 ## Sources
 
 Checked 2026-11-25.
+- dns-cache: [README](https://github.com/s4steve/dns-cache) at `b7c0ed9` (allowlists, walled-garden views, local records).
 - Claude Code: [network configuration](https://code.claude.com/docs/en/network-config),
   [settings](https://code.claude.com/docs/en/settings),
   [managed settings](https://code.claude.com/docs/en/managed-settings),

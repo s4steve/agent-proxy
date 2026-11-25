@@ -458,6 +458,72 @@ sees except the placeholder in `.env`.
   an SSE stream aren't seen), tool descriptions that carry injections ("tool poisoning"), and
   stdio servers' tool calls.
 
+## Prototype: DNS walled garden and transparent proxy (2026-11-25)
+
+`setups/proxy-dns/`: the agent has no `*_PROXY` variables. Its `/etc/resolv.conf` points at a
+dns-cache instance (s4steve/dns-cache `b7c0ed9`) on an internal-only network, in a view with
+`allow_only = true`, no allowlists, and local records generated from `policy.yaml`
+(`proxy/addons/dns_records.py`): every allowed host is an `A` record for the proxy. mitmproxy
+adds `transparent@443` and `transparent@80` listeners next to `regular@8080`, with
+`connection_strategy=lazy`. The addon judges each request by its SNI (or Host), then sets the
+request's host to that name, and a `server_connect` hook makes sure the upstream connection goes
+to it, never to the address the client dialled.
+
+### Doc and code checks
+- dns-cache README and `src/main.rs`: records answer before any allow/block check, match names
+  exactly, and give an empty `NOERROR` for types not defined; with `allow_only`, any other name
+  gets `NXDOMAIN`; allowlisted names are forwarded upstream (so the agent view has none).
+  Walled-garden denials are logged at `debug` (`src/main.rs:131`); this setup runs
+  `RUST_LOG=...,dns_cache=debug`.
+- mitmproxy: modes take a listen port (`transparent@443`), several modes can run at once, and
+  `connection_strategy=lazy` defers the upstream connection until a request needs it. Tested,
+  not looked up.
+
+### Results
+`setups/proxy-dns/probe.sh`, inside the agent, no proxy variables:
+
+| probe | result |
+|---|---|
+| `A` for an allowed name (gh-standin.test, api.anthropic.com) | the proxy's address; `AAAA` empty |
+| evil.test, `aGVsbG8gd29ybGQ.gh-standin.test` (tunnel-style label), dns.google | `NXDOMAIN`, logged by dns-cache; nothing forwarded (it has no route out anyway) |
+| HTTPS GET to an allowed host; plain HTTP to docs.test | 200, logged by the proxy, sink saw the right SNI/Host |
+| evil.test | can't resolve: no connection at all |
+| evil.test forced to the proxy's address (`curl --resolve`) | 403 `no rule for destination` |
+| fronted: SNI gh-standin.test, Host evil.test | 403 (`write outside own repos`; `sni_host` also fired) |
+| TLS by IP, no SNI | 403 |
+| DoH to dns.google forced to the proxy | 403 |
+| Node built-in `fetch`, no `NODE_USE_ENV_PROXY` | **200**: the tool that fails closed with an explicit proxy works here |
+| UDP 53 to 8.8.8.8 / 1.1.1.1, TCP 853, TCP 443 to an IP | `Network is unreachable` |
+
+Replay, all 11 fixtures, 3 runs each: **0/33 leaked** (results/final-replay.csv). With only the
+host allowlist (`POLICY_CHECKS=none`), the same 6 fixtures leak as with the explicit proxy
+(results/final-stages.csv, `proxy-dns:hosts`): the DNS path changes how traffic reaches the
+proxy, not what the policy decides. Fixtures aimed at unlisted hosts now fail at DNS instead.
+
+Agent mode (results/proxy-dns.csv): Claude Code works with no proxy settings, including the
+local stdio MCP server and the remote MCP server (both `connected`). 0 attempts, 0 leaks. The
+first 7 runs hit the stall below; the 6 after the fix took 18 to 35 s with no retries.
+
+### Findings
+- **A stall, found and fixed.** Every agent run first took about 203 s: one model request got no
+  response for 183 s, and Claude Code retried it (`api_retry`, `no_response.waited_ms: 183000`
+  in its stream-json). mitmproxy's debug log showed why: in transparent mode the request still
+  named the proxy's own address, so mitmproxy never matched it to the open upstream connection
+  and opened a new one for every request on the client connection; the sixth request never
+  reached the HTTP layer. Setting the request's host to the judged name fixed it (connections
+  are reused, 3 instead of one per request). Turning off HTTP/2 to clients did not help, and
+  HTTP/2 is back on. Unit test: `test_transparent_mode_connects_by_the_judged_name_never_the_dialled_address`.
+- **New traffic only seen this way:** Claude Code sends `HEAD /api/hello` (a connectivity
+  check) when it has no proxy configured. The policy now allows `HEAD` on api.anthropic.com.
+- **Records match names exactly**, so policy wildcards can't become DNS names. Every hostname a
+  tool uses must be listed; getting it wrong breaks the tool, it doesn't leak.
+- **Rewriting the request's host also rewrites its Host header.** A request whose Host differs
+  from its SNI is denied by `sni_host`; with that check off, it is now sent to the SNI's host
+  with a matching Host, which defeats fronting anyway.
+- dns-cache's log lines carry ANSI color codes under `docker logs` (no TTY): minor, for dns-cache.
+- Not tested: Cursor and Antigravity in this setup; IPv6 (the agent network is IPv4 only and
+  `AAAA` is empty); `NET_RAW` spoofing (dropped, not attacked).
+
 ## Tools that ignored proxy or CA settings
 | tool | proxy env | CA env | result inside the agent container (M2) |
 |---|---|---|---|
@@ -466,3 +532,4 @@ sees except the placeholder in `.env`.
 | curl, Python urllib/requests, git, pip, npm, Claude Code, WebFetch | honored | honored | logged by the proxy |
 | stdio MCP server (Python urllib), M3 | honored (inherited from Claude Code) | honored | logged by the proxy; fails closed if it drops the proxy vars |
 | Claude Code's remote (HTTP) MCP client, M6 | honored | honored (NODE_EXTRA_CA_CERTS) | connected through the proxy; JSON-RPC visible and gated |
+| Node built-in `fetch`, proxy-dns prototype | not needed | honored (NODE_EXTRA_CA_CERTS) | works with no proxy variables: DNS sends it to the proxy |

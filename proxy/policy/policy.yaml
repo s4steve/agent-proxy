@@ -16,7 +16,7 @@ checks: [actions, github, mcp, sni_host, secrets, entropy]
 rules:
   - name: anthropic-api
     hosts: [api.anthropic.com]
-    methods: [GET, POST]
+    methods: [GET, HEAD, POST]   # HEAD /api/hello: Claude Code's connectivity check (seen in proxy-dns)
     inspect: false        # carries prompts, and so the repo's content, by design: not scanned, not logged
 
   - name: github

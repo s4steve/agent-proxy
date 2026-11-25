@@ -25,6 +25,7 @@ This is a personal learning project. Readable code and honest measurements come 
 | M5 | credential broker | done: the agent holds a placeholder; with only the host allowlist the GitHub token leaked 0/10 (5/10 without the broker) |
 | M6 | MCP tool-call gating | done: per-tool rules for remote MCP servers; a shapeless secret through an allowed server's other tool leaks 3/3 without them, 0 with |
 | M7 | evaluation and [`RESULTS.md`](RESULTS.md) | done except the week of real use (`bin/daily.sh`): replay leaks 33/33 → sandbox 15/33 → enforce 0/33; about +4 ms per request |
+| prototype | DNS walled garden + transparent proxy ([setups/proxy-dns](setups/proxy-dns/README.md)) | works: no proxy settings in the agent, replay 0/33, Node `fetch` caught; uses [dns-cache](https://github.com/s4steve/dns-cache) |
 
 ## How it works
 
@@ -141,7 +142,8 @@ agent/              agent image and fixture entrypoint
 sink/               attacker server
 proxy/              mitmproxy image, egress addon, policy engine, policy.yaml and tests
 ca/scripts/         sink CA creation and trust removal
-setups/             per-setup compose overrides and settings (sandbox, proxy-observe, proxy-port experiment)
+setups/             per-setup compose overrides and settings (sandbox, proxy-observe, proxy-enforce,
+                    proxy-broker, proxy-dns prototype, proxy-port experiment)
 fixtures/           injection fixtures; _base/repo is the shared tiny project
 harness/            canaries, leak scanner, runner, staged runs, latency, report
 bin/daily.sh        real use behind the proxy (observe mode), for the false-positive study

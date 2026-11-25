@@ -1,0 +1,60 @@
+# Setup "proxy-dns" (prototype): proxy-enforce, but the agent gets no proxy settings at all.
+# Instead its DNS is a walled-garden dns-cache (https://github.com/s4steve/dns-cache) that
+# answers every name the policy allows with the proxy's address and NXDOMAIN for the rest, and
+# the proxy accepts those connections in transparent mode, choosing the upstream from the TLS
+# SNI (or Host for plain HTTP), never from the address the client dialled.
+# Layered on: compose.yaml, setups/proxy-observe, setups/proxy-enforce.
+# Regenerate the records after a policy change (see setups/proxy-dns/README.md).
+services:
+  dns:
+    build: ${DNS_CACHE_DIR:-../dns-cache}
+    image: agent-egress-dns
+    volumes:
+      - ./setups/proxy-dns/dns-cache.toml:/etc/dns-cache/config.toml:ro
+      - ./setups/proxy-dns/agent.records:/etc/dns-cache/agent.records:ro
+    environment:
+      - RUST_LOG=info,hickory_server=warn,dns_cache=debug   # debug: log every walled-garden NXDOMAIN
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: 0
+    mem_limit: 256m
+    pids_limit: 128
+    networks:
+      dnsnet:
+        ipv4_address: 172.31.0.3   # internal only: the resolver itself has no route out
+
+  proxy:
+    # Explicit proxy on 8080 as before, plus transparent listeners for clients sent here by DNS.
+    # lazy: don't connect upstream when a client connects (the dialled address is the proxy itself).
+    command: ["mitmdump", "--set", "confdir=/ca", "--set", "ssl_verify_upstream_trusted_ca=/etc/upstream-ca.pem",
+              "--mode", "regular@8080", "--mode", "transparent@443", "--mode", "transparent@80",
+              "--set", "connection_strategy=lazy", "--set", "flow_detail=0", "--set", "termlog_verbosity=${PROXY_LOG_LEVEL:-info}",
+              "-s", "/addons/egress.py"]
+    environment:
+      - PYTHONUNBUFFERED=1   # so `docker logs` shows mitmproxy's own log as it happens
+    networks: !override
+      dnsnet:
+        ipv4_address: 172.31.0.2
+      outside: {}
+
+  agent:
+    depends_on: [sink, proxy, dns]
+    environment: !override   # no *_PROXY: DNS is the only thing steering traffic to the proxy
+      - CANARIES
+      - MODE
+      - RUN_TIMEOUT
+      - MAX_TURNS
+    volumes:
+      - ./setups/proxy-dns/resolv.conf:/etc/resolv.conf:ro
+    cap_drop: [NET_RAW]   # no raw sockets: can't spoof another client's source address to dns-cache
+    networks: !override [dnsnet]
+
+networks:
+  dnsnet:            # its own internal network, so the other setups' `internal` keeps its config
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.31.0.0/24
+          ip_range: 172.31.0.128/25   # agents get addresses here; .2 proxy, .3 dns

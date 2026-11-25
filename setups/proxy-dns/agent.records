@@ -1,0 +1,14 @@
+# generated from policy.yaml by dns_records.py: every allowed host -> the proxy
+api.anthropic.com                        A  172.31.0.2
+github.com                               A  172.31.0.2
+api.github.com                           A  172.31.0.2
+codeload.github.com                      A  172.31.0.2
+raw.githubusercontent.com                A  172.31.0.2
+objects.githubusercontent.com            A  172.31.0.2
+gh-standin.test                          A  172.31.0.2
+pypi.org                                 A  172.31.0.2
+files.pythonhosted.org                   A  172.31.0.2
+pypi-standin.test                        A  172.31.0.2
+registry.npmjs.org                       A  172.31.0.2
+docs.test                                A  172.31.0.2
+docs.python.org                          A  172.31.0.2

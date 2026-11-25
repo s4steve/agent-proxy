@@ -33,6 +33,8 @@ REDACTED_HOSTS = {"api.anthropic.com"}
 SPLICE_HOSTS: dict[str, str] = {}  # host -> reason
 # Client connection id -> process label from the CONNECT's Proxy-Authorization username (M3).
 LABELS: dict[str, str] = {}
+# Transparent mode (setups/proxy-dns): client connection id -> (name, port) to connect to.
+TARGETS: dict[str, tuple[str, int]] = {}
 _policy_file: policy.PolicyFile | None = None
 _reported_error: str | None = None
 
@@ -70,8 +72,15 @@ def proxy_label(headers) -> str | None:
         return None
 
 
+def transparent(flow: http.HTTPFlow) -> bool:
+    return getattr(flow.client_conn.proxy_mode, "type_name", "") == "transparent"
+
+
 def dest_of(flow: http.HTTPFlow) -> str:
-    """Where the bytes go: the CONNECT target for tunnelled requests, else the request host."""
+    """Where the bytes go: the CONNECT target for tunnelled requests; in transparent mode the
+    TLS SNI (or Host for plain HTTP); else the request host."""
+    if transparent(flow):
+        return flow.client_conn.sni or (flow.request.host_header or "").rsplit(":", 1)[0]
     addr = flow.server_conn.address
     return addr[0] if addr else flow.request.host
 
@@ -143,6 +152,13 @@ class Egress:
 
     def client_disconnected(self, client) -> None:
         LABELS.pop(client.id, None)
+        TARGETS.pop(client.id, None)
+
+    def server_connect(self, data) -> None:
+        # Transparent mode: the client dialled the proxy's own address (that's what DNS told it).
+        # Connect to the name the policy judged, never to an address the client chose.
+        if (target := TARGETS.get(data.client.id)) is not None:
+            data.server.address = target
 
     def tls_clienthello(self, data: tls.ClientHelloData) -> None:
         sni = data.client_hello.sni
@@ -169,6 +185,13 @@ class Egress:
         if label := proxy_label(flow.request.headers):
             flow.metadata["process"] = label
         flow.request.headers.pop("proxy-authorization", None)
+        if transparent(flow):
+            name = dest_of(flow)
+            if not name:
+                flow.metadata["decision"] = (None, "deny", "no SNI or Host", [])
+                block(flow, "no SNI or Host")
+                return
+            TARGETS[flow.client_conn.id] = (name, flow.request.port)
         pol = current_policy()
         rule, decision, reason, hits = policy.decide(pol, to_request(flow))
         flow.metadata["decision"] = (rule, decision, reason, hits)
@@ -180,6 +203,12 @@ class Egress:
             if MODE == "enforce":
                 block(flow, reason)
             return  # observe mode passes it through, but never with a real secret
+        # Transparent mode: aim the request at the name just judged, so mitmproxy connects there
+        # and can reuse that upstream connection (it matches connections by request host).
+        # (Setting host also rewrites the Host header; a request whose Host differed from its SNI
+        # was already denied by sni_host, or, with that check off, is now sent to the SNI's host.)
+        if transparent(flow) and flow.request.host != (name := dest_of(flow)):
+            flow.request.host = name
         # Credential broker (M5): only allowed requests get the real secret, only in its headers.
         headers, used = policy.inject(pol, to_request(flow))
         if used:

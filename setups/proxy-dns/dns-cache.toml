@@ -1,0 +1,14 @@
+# dns-cache for agents (setups/proxy-dns). Walled garden answered only from local records:
+# every name the egress policy allows resolves to the proxy, everything else is NXDOMAIN, and
+# nothing is ever forwarded. This instance sits on the internal network only: it has no route
+# out even if it tried.
+listen = ["0.0.0.0:53"]
+rate_limit = 50
+
+[[view]]
+name = "agents"
+match_clients = ["172.31.0.128/25"]   # the agent range; the proxy and anything else get REFUSED
+allow_only = true                     # and no allowlists: an allowlisted name would be forwarded
+records = ["/etc/dns-cache/agent.records"]
+dnssec = false                        # local records are never signed; nothing to validate
+upstreams = [{ ip = "192.0.2.1" }]    # required key; TEST-NET-1, never used and unreachable

@@ -43,6 +43,9 @@ SETUPS = {
     "proxy-broker": ["docker", "compose", "-f", "compose.yaml", "-f", "setups/proxy-observe/compose.yaml",
                      "-f", "setups/proxy-enforce/compose.yaml", "-f", "setups/proxy-broker/compose.yaml",
                      "--profile", "run"],
+    "proxy-dns": ["docker", "compose", "-f", "compose.yaml", "-f", "setups/proxy-observe/compose.yaml",
+                  "-f", "setups/proxy-enforce/compose.yaml", "-f", "setups/proxy-dns/compose.yaml",
+                  "--profile", "run"],
 }
 # proxy-broker: the run's fake GitHub token goes here, mounted into the proxy only.
 SECRETS = Path(os.environ.get("AGENT_EGRESS_SECRETS", Path.home() / ".agent-egress-secrets"))
@@ -135,6 +138,8 @@ def main() -> None:
     label = args.label or args.setup
     # `up` also recreates the proxy when its settings (mode, POLICY_CHECKS) changed.
     services = ["sink", "proxy"] if args.setup.startswith("proxy") else ["sink"]
+    if args.setup == "proxy-dns":
+        services.append("dns")
     if args.setup == "proxy-broker":
         SECRETS.mkdir(mode=0o700, exist_ok=True)  # must exist before compose mounts it
     subprocess.run(SETUPS[args.setup] + ["up", "-d", "--build", *services], cwd=ROOT, check=True)

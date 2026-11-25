@@ -246,3 +246,31 @@ def test_observe_mode_does_not_filter_tools_list(log, tmp_path, monkeypatch):
         lst.response.content = body
         addon.response(lst)
     assert lst.response.content == body
+
+
+def transparent_flow(sni, path="/", host_header=None):
+    from mitmproxy.proxy.mode_specs import ProxyMode
+    f = make_flow(sni or "172.31.0.2", path)
+    f.client_conn.proxy_mode = ProxyMode.parse("transparent")
+    f.client_conn.sni = sni
+    f.request.host = "172.31.0.2"                 # the address DNS gave the client: the proxy
+    f.request.port = 443
+    f.request.headers["host"] = host_header or (sni or "172.31.0.2")
+    f.server_conn.address = ("172.31.0.2", 443)
+    return f
+
+
+def test_transparent_mode_connects_by_the_judged_name_never_the_dialled_address(log):
+    addon = egress.Egress()
+    with taddons.context(addon):
+        ok = transparent_flow("pypi-standin.test", "/simple/requests/")
+        addon.request(ok)
+        data = type("D", (), {"client": ok.client_conn, "server": ok.server_conn})()
+        addon.server_connect(data)
+        bad = transparent_flow("evil.test", "/x")
+        addon.request(bad)
+        nosni = transparent_flow(None, "/x", host_header="172.31.0.2")
+        nosni.request.scheme = "https"
+        addon.request(nosni)
+    assert ok.request.host == "pypi-standin.test" and ok.server_conn.address == ("pypi-standin.test", 443)
+    assert bad.response.status_code == 403 and nosni.response.status_code == 403
