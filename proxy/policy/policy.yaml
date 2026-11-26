@@ -19,6 +19,27 @@ rules:
     methods: [GET, HEAD, POST]   # HEAD /api/hello: Claude Code's connectivity check (seen in proxy-dns)
     inspect: false        # carries prompts, and so the repo's content, by design: not scanned, not logged
 
+  # Found by the daily study (bin/daily.sh, 2026-11-25): Claude Code's own traffic besides the API.
+  - name: claude-auth          # OAuth hello and token refresh; the body carries the refresh token
+    hosts: [platform.claude.com]
+    paths: [/v1/oauth/*]
+    methods: [GET, POST]
+    inspect: false
+
+  - name: claude-connectors    # claude.ai connectors (Notion, Slack, ...) proxied through Anthropic
+    hosts: [mcp-proxy.anthropic.com]
+    paths: [/v1/mcp/*]
+    methods: [GET, POST]
+    # ponytail: not inspected. Every request fails `secrets` (OAuth token in Authorization) and
+    # `entropy` (server id in the path). This is a write channel to third-party services, so the
+    # real control is which connectors the container gets, not this rule.
+    inspect: false
+
+  - name: claude-downloads     # update check and the official plugin marketplace
+    hosts: [downloads.claude.ai]
+    paths: [/claude-code-releases/*]
+    methods: [GET, HEAD]
+
   - name: github
     hosts: [github.com, api.github.com, codeload.github.com, raw.githubusercontent.com,
             objects.githubusercontent.com, gh-standin.test]

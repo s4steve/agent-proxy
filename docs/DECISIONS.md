@@ -533,3 +533,15 @@ first 7 runs hit the stall below; the 6 after the fix took 18 to 35 s with no re
 | stdio MCP server (Python urllib), M3 | honored (inherited from Claude Code) | honored | logged by the proxy; fails closed if it drops the proxy vars |
 | Claude Code's remote (HTTP) MCP client, M6 | honored | honored (NODE_EXTRA_CA_CERTS) | connected through the proxy; JSON-RPC visible and gated |
 | Node built-in `fetch`, proxy-dns prototype | not needed | honored (NODE_EXTRA_CA_CERTS) | works with no proxy variables: DNS sends it to the proxy |
+
+## Daily study: Claude Code's own hosts (2026-11-25)
+
+The first `bin/daily.sh` session showed three hosts besides api.anthropic.com that observe mode logged as `deny`. All three are now in the policy:
+
+| host | paths seen | rule | inspected |
+|---|---|---|---|
+| platform.claude.com | `GET /v1/oauth/hello`, `POST /v1/oauth/token` | claude-auth | no: the body carries the refresh token. Added to `REDACTED_HOSTS` too |
+| mcp-proxy.anthropic.com | `GET`/`POST /v1/mcp/<id>` (68 POST, 16 GET) | claude-connectors | no, see below |
+| downloads.claude.ai | `GET /claude-code-releases/plugins/...` | claude-downloads | yes |
+
+**claude.ai connectors are a false positive for two detectors.** Every request tripped `anthropic_key`, because the `sk-ant-oat01` OAuth token travels in the Authorization header, and `entropy`, because of the server id in the path. These requests carry writes to third-party services such as Notion and Slack. With the rule not inspected, nothing scans that channel, so the control that matters is which connectors the agent container has at all.

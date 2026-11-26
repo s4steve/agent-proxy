@@ -139,6 +139,11 @@ def test_real_policy_file_parses():
         pytest.skip("policy dir not mounted")
     p = P.parse(open(path).read())
     assert p.rule_for("api.anthropic.com").inspect is False and p.rule_for("evil.test") is None
+    # Claude Code's own hosts, as seen in the daily study
+    assert p.rule_for("platform.claude.com", "/v1/oauth/token").name == "claude-auth"
+    assert p.rule_for("mcp-proxy.anthropic.com", "/v1/mcp/srv_01AbCdEf").name == "claude-connectors"
+    assert p.rule_for("downloads.claude.ai", "/claude-code-releases/plugins/x/latest").name == "claude-downloads"
+    assert p.rule_for("downloads.claude.ai", "/anything-else") is None
 
 
 BROKER = """

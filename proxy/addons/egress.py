@@ -28,7 +28,7 @@ LOG_PATH = Path(os.environ.get("EGRESS_LOG", "/log/flows.jsonl"))
 POLICY_PATH = os.environ.get("POLICY_FILE", "/policy/policy.yaml")
 MODE = os.environ.get("POLICY_MODE", "observe")
 # Hosts whose traffic is logged with host, method, bare path and timing only.
-REDACTED_HOSTS = {"api.anthropic.com"}
+REDACTED_HOSTS = {"api.anthropic.com", "platform.claude.com"}
 # TLS hosts passed through without interception. Empty: everything is inspected.
 SPLICE_HOSTS: dict[str, str] = {}  # host -> reason
 # Client connection id -> process label from the CONNECT's Proxy-Authorization username (M3).
